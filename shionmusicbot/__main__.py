@@ -5,13 +5,17 @@ import logging
 
 from pyrogram import idle
 
-from .clients import CONFIG, assistant, bot, calls, db, player
 from .logger import setup_logging
 
 logger = logging.getLogger(__name__)
 
 
 async def main() -> None:
+    # Import clients inside the active event loop. Pyrogram/PyTgCalls keep references
+    # to the loop they are created on, so importing them at module load time and then
+    # entering asyncio.run() can trigger: "Future attached to a different loop".
+    from .clients import CONFIG, assistant, bot, calls, db, player
+
     setup_logging(CONFIG.log_level)
     CONFIG.validate_runtime()
 
