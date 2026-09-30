@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urljoin, urlparse, parse_qs
 
 from .models import Track
 from .utils import is_url, truncate
@@ -12,6 +13,7 @@ from .utils import is_url, truncate
 logger = logging.getLogger(__name__)
 
 YOUTUBE_HOSTS = ("youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be")
+YOUTUBE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 
 
 class DownloadError(RuntimeError):
@@ -102,14 +104,21 @@ class Downloader:
     async def _resolve_with_external_api(
         self, query: str, requester_id: int, requester_name: str
     ) -> Track | None:
-        """Optional JSON extractor hook for self-hosted YouTube APIs.
+        """Resolve through an optional self-hosted YouTube/PremiumTube endpoint.
 
-        The endpoint is intentionally flexible. If YT_API_BASE is set, the bot tries:
-        {YT_API_BASE}?q=<query>. JSON may contain url/stream_url/audio_url plus title/duration.
-        If the endpoint fails, the bot silently falls back to yt-dlp.
+        Supported formats:
+        1. Generic JSON endpoint: {base}?q=<query> returning url/stream_url/audio_url.
+        2. PremiumTube-style endpoint: {base}/api.php?action=search|video.
         """
         if not self.yt_api_base:
             return None
+        try:
+            premium = await self._resolve_with_premiumtube(query, requester_id, requester_name)
+            if premium:
+                return premium
+        except Exception as exc:  # pragma: no cover - optional network hook
+            logger.debug("PremiumTube API failed: %s", exc)
+
         try:
             import aiohttp
 
@@ -131,25 +140,121 @@ class Downloader:
                 payload = payload[0]
             if not isinstance(payload, dict):
                 return None
-            source = (
-                payload.get("stream_url")
-                or payload.get("audio_url")
-                or payload.get("url")
-                or payload.get("link")
-                or payload.get("webpage_url")
-            )
+            source = self._payload_source(payload)
             if not source:
                 return None
             return Track(
                 title=str(payload.get("title") or query),
-                source=str(source),
+                source=urljoin(self.yt_api_base + "/", str(source)),
                 requester_id=requester_id,
                 requester_name=requester_name,
                 duration=_safe_int(payload.get("duration")),
-                webpage_url=str(payload.get("webpage_url") or source),
+                webpage_url=str(payload.get("webpage_url") or payload.get("url") or source),
                 thumbnail=payload.get("thumbnail"),
                 is_live=bool(payload.get("is_live", False)),
             )
+        return None
+
+    async def _resolve_with_premiumtube(
+        self, query: str, requester_id: int, requester_name: str
+    ) -> Track | None:
+        import aiohttp
+
+        base = self.yt_api_base or ""
+        api_url = urljoin(base if base.endswith("/") else base + "/", "api.php")
+        video_id = self._extract_youtube_id(query)
+        async with aiohttp.ClientSession(headers={"Accept": "application/json"}) as session:
+            if not video_id:
+                async with session.get(
+                    api_url,
+                    params={"action": "search", "q": query, "region": "India"},
+                    timeout=25,
+                ) as response:
+                    if response.status >= 400:
+                        return None
+                    search_data = await response.json(content_type=None)
+                videos = (search_data.get("data") or {}).get("videos") or []
+                if not videos:
+                    return None
+                video_id = videos[0].get("id")
+                if not video_id:
+                    return None
+
+            async with session.get(
+                api_url,
+                params={"action": "video", "id": video_id, "region": "India"},
+                timeout=35,
+            ) as response:
+                if response.status >= 400:
+                    return None
+                detail_data = await response.json(content_type=None)
+
+        payload = detail_data.get("data") or {}
+        if not isinstance(payload, dict):
+            return None
+        source = self._payload_source(payload)
+        if not source:
+            return None
+        source_url = urljoin(base if base.endswith("/") else base + "/", str(source))
+        webpage_url = urljoin(base if base.endswith("/") else base + "/", f"?v={video_id}")
+        return Track(
+            title=str(payload.get("title") or query),
+            source=source_url,
+            requester_id=requester_id,
+            requester_name=requester_name,
+            duration=_safe_int(payload.get("duration")),
+            webpage_url=webpage_url,
+            thumbnail=payload.get("thumbnail"),
+            is_live=bool(payload.get("is_live", False)),
+        )
+
+    @staticmethod
+    def _payload_source(payload: dict[str, Any]) -> str | None:
+        direct = (
+            payload.get("stream_url")
+            or payload.get("audio_url")
+            or payload.get("url")
+            or payload.get("link")
+        )
+        if direct:
+            return str(direct)
+        recovery = payload.get("recovery_stream")
+        if isinstance(recovery, dict) and recovery.get("url"):
+            return str(recovery["url"])
+        qualities = payload.get("qualities")
+        if isinstance(qualities, list):
+            for quality in qualities:
+                if (
+                    isinstance(quality, dict)
+                    and quality.get("type") == "progressive"
+                    and quality.get("url")
+                ):
+                    return str(quality["url"])
+            for quality in qualities:
+                if isinstance(quality, dict) and quality.get("url"):
+                    return str(quality["url"])
+        return payload.get("webpage_url")
+
+    @staticmethod
+    def _extract_youtube_id(query: str) -> str | None:
+        query = query.strip()
+        if YOUTUBE_ID_RE.fullmatch(query):
+            return query
+        if not is_url(query):
+            return None
+        parsed = urlparse(query)
+        host = parsed.netloc.lower().removeprefix("www.").removeprefix("m.")
+        if host == "youtu.be":
+            candidate = parsed.path.strip("/").split("/", 1)[0]
+            return candidate if YOUTUBE_ID_RE.fullmatch(candidate) else None
+        if "youtube.com" in host:
+            if parsed.path.startswith("/watch"):
+                candidate = parse_qs(parsed.query).get("v", [""])[0]
+                return candidate if YOUTUBE_ID_RE.fullmatch(candidate) else None
+            for prefix in ("/shorts/", "/live/", "/embed/"):
+                if parsed.path.startswith(prefix):
+                    candidate = parsed.path.removeprefix(prefix).split("/", 1)[0]
+                    return candidate if YOUTUBE_ID_RE.fullmatch(candidate) else None
         return None
 
     def _base_ytdlp_options(self) -> dict[str, Any]:
