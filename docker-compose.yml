@@ -1,0 +1,15 @@
+services:
+  shionmusicbot:
+    build: .
+    container_name: shionmusicbot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_PATH: /app/data/shion.sqlite3
+      SESSIONS_DIR: /app/sessions
+      DOWNLOADS_DIR: /app/downloads
+    volumes:
+      - ./sessions:/app/sessions
+      - ./downloads:/app/downloads
+      - ./data:/app/data

@@ -1,0 +1,291 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+from pathlib import Path
+from typing import Any
+from urllib.parse import quote_plus
+
+from .models import Track
+from .utils import is_url, truncate
+
+logger = logging.getLogger(__name__)
+
+YOUTUBE_HOSTS = ("youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be")
+
+
+class DownloadError(RuntimeError):
+    pass
+
+
+class Downloader:
+    def __init__(
+        self,
+        downloads_dir: Path,
+        *,
+        max_duration_seconds: int,
+        max_file_size_mb: int,
+        playlist_limit: int,
+        cookie_file: str | None = None,
+        yt_api_base: str | None = None,
+    ) -> None:
+        self.downloads_dir = downloads_dir
+        self.max_duration_seconds = max_duration_seconds
+        self.max_file_size_mb = max_file_size_mb
+        self.playlist_limit = playlist_limit
+        self.cookie_file = cookie_file
+        self.yt_api_base = yt_api_base.rstrip("/") if yt_api_base else None
+
+    async def resolve(self, query: str, requester_id: int, requester_name: str) -> Track:
+        query = query.strip()
+        if not query:
+            raise DownloadError("Empty query")
+
+        external = await self._resolve_with_external_api(query, requester_id, requester_name)
+        if external:
+            return external
+
+        return await asyncio.to_thread(
+            self._resolve_with_ytdlp, query, requester_id, requester_name
+        )
+
+    async def resolve_playlist(
+        self, query: str, requester_id: int, requester_name: str
+    ) -> list[Track]:
+        query = query.strip()
+        if not query:
+            raise DownloadError("Empty playlist query")
+        return await asyncio.to_thread(
+            self._resolve_playlist_with_ytdlp, query, requester_id, requester_name
+        )
+
+    async def from_telegram_reply(
+        self, reply: Any, requester_id: int, requester_name: str
+    ) -> Track:
+        media = (
+            getattr(reply, "audio", None)
+            or getattr(reply, "voice", None)
+            or getattr(reply, "video", None)
+            or getattr(reply, "document", None)
+        )
+        if media is None:
+            raise DownloadError("Reply audio, voice, video, ya document hona chahiye.")
+
+        file_size = getattr(media, "file_size", None)
+        if file_size and file_size > self.max_file_size_mb * 1024 * 1024:
+            raise DownloadError(f"File too large. Max {self.max_file_size_mb} MB allowed.")
+
+        chat_dir = self.downloads_dir / str(reply.chat.id)
+        chat_dir.mkdir(parents=True, exist_ok=True)
+        path = await reply.download(file_name=str(chat_dir) + "/")
+        if not path:
+            raise DownloadError("Telegram media download failed.")
+
+        title = (
+            getattr(media, "title", None)
+            or getattr(media, "file_name", None)
+            or getattr(reply, "caption", None)
+            or "Telegram audio"
+        )
+        duration = getattr(media, "duration", None)
+        return Track(
+            title=truncate(str(title), 100),
+            source=str(path),
+            requester_id=requester_id,
+            requester_name=requester_name,
+            duration=int(duration) if duration else None,
+            webpage_url=None,
+            cleanup_path=Path(path),
+            is_live=False,
+        )
+
+    async def _resolve_with_external_api(
+        self, query: str, requester_id: int, requester_name: str
+    ) -> Track | None:
+        """Optional JSON extractor hook for self-hosted YouTube APIs.
+
+        The endpoint is intentionally flexible. If YT_API_BASE is set, the bot tries:
+        {YT_API_BASE}?q=<query>. JSON may contain url/stream_url/audio_url plus title/duration.
+        If the endpoint fails, the bot silently falls back to yt-dlp.
+        """
+        if not self.yt_api_base:
+            return None
+        try:
+            import aiohttp
+
+            url = f"{self.yt_api_base}?q={quote_plus(query)}"
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=15) as response:
+                    if response.status >= 400:
+                        return None
+                    data = await response.json(content_type=None)
+        except Exception as exc:  # pragma: no cover - optional network hook
+            logger.debug("External YT API failed: %s", exc)
+            return None
+
+        if isinstance(data, list) and data:
+            data = data[0]
+        if isinstance(data, dict):
+            payload = data.get("result") or data.get("data") or data
+            if isinstance(payload, list) and payload:
+                payload = payload[0]
+            if not isinstance(payload, dict):
+                return None
+            source = (
+                payload.get("stream_url")
+                or payload.get("audio_url")
+                or payload.get("url")
+                or payload.get("link")
+                or payload.get("webpage_url")
+            )
+            if not source:
+                return None
+            return Track(
+                title=str(payload.get("title") or query),
+                source=str(source),
+                requester_id=requester_id,
+                requester_name=requester_name,
+                duration=_safe_int(payload.get("duration")),
+                webpage_url=str(payload.get("webpage_url") or source),
+                thumbnail=payload.get("thumbnail"),
+                is_live=bool(payload.get("is_live", False)),
+            )
+        return None
+
+    def _base_ytdlp_options(self) -> dict[str, Any]:
+        options: dict[str, Any] = {
+            "quiet": True,
+            "no_warnings": True,
+            "ignoreerrors": False,
+            "nocheckcertificate": True,
+            "format": "bestaudio/best",
+            "source_address": "0.0.0.0",
+        }
+        if self.cookie_file:
+            options["cookiefile"] = self.cookie_file
+        return options
+
+    def _resolve_with_ytdlp(self, query: str, requester_id: int, requester_name: str) -> Track:
+        import yt_dlp
+
+        options = self._base_ytdlp_options()
+        options["noplaylist"] = True
+        lookup = query if is_url(query) else f"ytsearch1:{query}"
+
+        try:
+            with yt_dlp.YoutubeDL(options) as ydl:
+                info = ydl.extract_info(lookup, download=False)
+        except Exception as exc:
+            if is_url(query):
+                logger.info("yt-dlp failed for direct URL, trying raw stream: %s", exc)
+                return Track(
+                    title=query.rsplit("/", 1)[-1] or query,
+                    source=query,
+                    requester_id=requester_id,
+                    requester_name=requester_name,
+                    webpage_url=query,
+                    is_live=True,
+                )
+            raise DownloadError(f"Track resolve failed: {exc}") from exc
+
+        if not info:
+            raise DownloadError("No result found.")
+        if info.get("_type") in {"playlist", "multi_video"}:
+            entries = [entry for entry in info.get("entries", []) if entry]
+            if not entries:
+                raise DownloadError("No playable result found.")
+            info = entries[0]
+
+        return self._track_from_info(info, query, requester_id, requester_name)
+
+    def _resolve_playlist_with_ytdlp(
+        self, query: str, requester_id: int, requester_name: str
+    ) -> list[Track]:
+        import yt_dlp
+
+        options = self._base_ytdlp_options()
+        options.update({"extract_flat": "in_playlist", "playlistend": self.playlist_limit})
+        lookup = query if is_url(query) else f"ytsearch{self.playlist_limit}:{query}"
+
+        try:
+            with yt_dlp.YoutubeDL(options) as ydl:
+                info = ydl.extract_info(lookup, download=False)
+        except Exception as exc:
+            raise DownloadError(f"Playlist resolve failed: {exc}") from exc
+
+        tracks: list[Track] = []
+        if not info:
+            return tracks
+        if info.get("_type") in {"playlist", "multi_video"}:
+            entries = [entry for entry in info.get("entries", []) if entry]
+            for entry in entries[: self.playlist_limit]:
+                try:
+                    tracks.append(self._track_from_info(entry, query, requester_id, requester_name))
+                except DownloadError:
+                    continue
+        else:
+            tracks.append(self._track_from_info(info, query, requester_id, requester_name))
+        return tracks
+
+    def _track_from_info(
+        self, info: dict[str, Any], original_query: str, requester_id: int, requester_name: str
+    ) -> Track:
+        title = str(info.get("title") or original_query)
+        duration = _safe_int(info.get("duration"))
+        is_live_track = bool(info.get("is_live") or info.get("live_status") == "is_live")
+        if duration and duration > self.max_duration_seconds and not is_live_track:
+            max_minutes = self.max_duration_seconds // 60
+            raise DownloadError(
+                f"Track too long: {duration // 60} min. Max {max_minutes} min allowed."
+            )
+
+        webpage_url = info.get("webpage_url") or info.get("original_url") or info.get("url")
+        source = self._best_source(info, webpage_url)
+        if not source:
+            raise DownloadError("Playable source not found.")
+
+        return Track(
+            title=title,
+            source=source,
+            requester_id=requester_id,
+            requester_name=requester_name,
+            duration=duration,
+            webpage_url=webpage_url,
+            thumbnail=info.get("thumbnail"),
+            is_live=is_live_track,
+        )
+
+    @staticmethod
+    def _best_source(info: dict[str, Any], webpage_url: str | None) -> str | None:
+        extractor = str(info.get("extractor_key") or info.get("ie_key") or "").lower()
+        raw_url = info.get("url")
+        video_id = info.get("id")
+
+        # PyTgCalls has built-in yt-dlp handling for YouTube links, so keep YouTube
+        # as a webpage URL. This prevents expiring direct media URLs in long queues.
+        if "youtube" in extractor:
+            if webpage_url:
+                return str(webpage_url)
+            if video_id:
+                return f"https://www.youtube.com/watch?v={video_id}"
+
+        if webpage_url and any(host in str(webpage_url).lower() for host in YOUTUBE_HOSTS):
+            return str(webpage_url)
+        if raw_url:
+            raw = str(raw_url)
+            if raw.startswith("http"):
+                return raw
+            if "youtube" in extractor:
+                return f"https://www.youtube.com/watch?v={raw}"
+        if webpage_url:
+            return str(webpage_url)
+        return None
+
+
+def _safe_int(value: Any) -> int | None:
+    try:
+        if value is None:
+            return None
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None

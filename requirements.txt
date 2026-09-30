@@ -1,0 +1,6 @@
+py-tgcalls[pyrogram]==3.0.0
+pyrogrammod>=2.4.1
+TgCrypto>=1.2.5
+yt-dlp>=2024.12.23
+python-dotenv>=1.0.1
+aiohttp>=3.9.3
