@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import uuid
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote_plus, urljoin, urlparse, parse_qs
+from urllib.parse import parse_qs, quote_plus, urljoin, urlparse
 
 from .models import Track
 from .utils import is_url, truncate
@@ -14,6 +15,13 @@ logger = logging.getLogger(__name__)
 
 YOUTUBE_HOSTS = ("youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be")
 YOUTUBE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
+PREMIUMTUBE_HEADERS = {
+    "Accept": "application/json, text/plain, */*",
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    ),
+}
 
 
 class DownloadError(RuntimeError):
@@ -116,6 +124,8 @@ class Downloader:
             premium = await self._resolve_with_premiumtube(query, requester_id, requester_name)
             if premium:
                 return premium
+        except DownloadError:
+            raise
         except Exception as exc:  # pragma: no cover - optional network hook
             logger.debug("PremiumTube API failed: %s", exc)
 
@@ -161,14 +171,16 @@ class Downloader:
         import aiohttp
 
         base = self.yt_api_base or ""
-        api_url = urljoin(base if base.endswith("/") else base + "/", "api.php")
+        api_base = base if base.endswith("/") else base + "/"
+        api_url = urljoin(api_base, "api.php")
         video_id = self._extract_youtube_id(query)
-        async with aiohttp.ClientSession(headers={"Accept": "application/json"}) as session:
+        headers = {**PREMIUMTUBE_HEADERS, "Referer": api_base}
+        timeout = aiohttp.ClientTimeout(total=60, sock_connect=15, sock_read=30)
+        async with aiohttp.ClientSession(headers=headers, timeout=timeout) as session:
             if not video_id:
                 async with session.get(
                     api_url,
                     params={"action": "search", "q": query, "region": "India"},
-                    timeout=25,
                 ) as response:
                     if response.status >= 400:
                         return None
@@ -183,30 +195,96 @@ class Downloader:
             async with session.get(
                 api_url,
                 params={"action": "video", "id": video_id, "region": "India"},
-                timeout=35,
             ) as response:
                 if response.status >= 400:
                     return None
                 detail_data = await response.json(content_type=None)
 
-        payload = detail_data.get("data") or {}
-        if not isinstance(payload, dict):
-            return None
-        source = self._payload_source(payload)
-        if not source:
-            return None
-        source_url = urljoin(base if base.endswith("/") else base + "/", str(source))
-        webpage_url = urljoin(base if base.endswith("/") else base + "/", f"?v={video_id}")
+            payload = detail_data.get("data") or {}
+            if not isinstance(payload, dict):
+                return None
+            source = self._payload_source(payload)
+            if not source:
+                return None
+            source_url = urljoin(api_base, str(source))
+            duration = _safe_int(payload.get("duration"))
+            is_live_track = bool(payload.get("is_live", False))
+            if duration and duration > self.max_duration_seconds and not is_live_track:
+                max_minutes = self.max_duration_seconds // 60
+                raise DownloadError(
+                    f"Track too long: {duration // 60} min. Max {max_minutes} min allowed."
+                )
+
+            # Premium Tube stream.php links are long proxy URLs. PyTgCalls/FFmpeg can
+            # hang on some hosts when reading those URLs directly. Mature VC bots first
+            # prepare a local playable file; doing the same here keeps playback stable.
+            local_source = source_url
+            cleanup_path: Path | None = None
+            if not is_live_track and source_url.startswith("http"):
+                cleanup_path = await self._download_remote_media(
+                    session,
+                    source_url,
+                    video_id=video_id,
+                    referer=api_base,
+                )
+                local_source = str(cleanup_path)
+
+        webpage_url = urljoin(api_base, f"?v={video_id}")
         return Track(
             title=str(payload.get("title") or query),
-            source=source_url,
+            source=local_source,
             requester_id=requester_id,
             requester_name=requester_name,
-            duration=_safe_int(payload.get("duration")),
+            duration=duration,
             webpage_url=webpage_url,
             thumbnail=payload.get("thumbnail"),
-            is_live=bool(payload.get("is_live", False)),
+            cleanup_path=cleanup_path,
+            is_live=is_live_track,
         )
+
+    async def _download_remote_media(
+        self,
+        session: Any,
+        source_url: str,
+        *,
+        video_id: str,
+        referer: str,
+    ) -> Path:
+        cache_dir = self.downloads_dir / "premiumtube"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        final_path = cache_dir / f"{video_id}-{uuid.uuid4().hex[:8]}.mp4"
+        temp_path = final_path.with_suffix(".part")
+        max_bytes = self.max_file_size_mb * 1024 * 1024
+        headers = {"Referer": referer, "User-Agent": PREMIUMTUBE_HEADERS["User-Agent"]}
+        written = 0
+        try:
+            async with session.get(source_url, headers=headers) as response:
+                if response.status >= 400:
+                    raise DownloadError(f"Premium Tube stream returned HTTP {response.status}")
+                content_length = _safe_int(response.headers.get("Content-Length"))
+                if content_length and content_length > max_bytes:
+                    raise DownloadError(f"File too large. Max {self.max_file_size_mb} MB allowed.")
+                with temp_path.open("wb") as fp:
+                    async for chunk in response.content.iter_chunked(256 * 1024):
+                        if not chunk:
+                            continue
+                        written += len(chunk)
+                        if written > max_bytes:
+                            raise DownloadError(
+                                f"File too large. Max {self.max_file_size_mb} MB allowed."
+                            )
+                        fp.write(chunk)
+            if written == 0:
+                raise DownloadError("Premium Tube stream download returned an empty file.")
+            temp_path.replace(final_path)
+            logger.info("Prepared Premium Tube media file %s (%s bytes)", final_path, written)
+            return final_path
+        except Exception:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            raise
 
     @staticmethod
     def _payload_source(payload: dict[str, Any]) -> str | None:

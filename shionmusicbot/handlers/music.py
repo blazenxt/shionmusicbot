@@ -62,6 +62,9 @@ async def play_handler(client, message):
         return await message.reply_text(NEED_ADMIN)
 
     query = _args(message)
+    if not query and not message.reply_to_message:
+        return await message.reply_text(NEED_QUERY)
+
     force = (message.command[0] or "").lower() in {"playforce", "fplay"}
     status = await message.reply_text(SEARCHING)
     try:
@@ -189,7 +192,7 @@ async def skip_handler(_, message):
         await message.reply_text("⏭ Skipped. Queue finished.")
 
 
-@bot.on_message(_cmd(["stop", "end"]) & filters.group)
+@bot.on_message(_cmd(["stop", "end", "cancel"]) & filters.group)
 @admin_or_auth
 async def stop_handler(_, message):
     await player.stop(message.chat.id)

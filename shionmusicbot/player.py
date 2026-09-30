@@ -92,7 +92,19 @@ class Player:
                 position = len(state.queue)
 
         if should_start:
-            await self._play_track(chat_id, track)
+            try:
+                await self._play_track(chat_id, track)
+            except Exception:
+                async with state.lock:
+                    if state.current is track:
+                        state.current = None
+                        state.paused = False
+                await self._cleanup_track(track)
+                try:
+                    await self.calls.leave_call(chat_id)
+                except Exception:
+                    pass
+                raise
         return EnqueueResult(started=should_start, position=position, track=track)
 
     async def add_many(self, chat_id: int, tracks: list[Track]) -> tuple[int, bool]:
@@ -121,10 +133,13 @@ class Player:
             video_flags=MediaStream.Flags.IGNORE,
             ffmpeg_parameters=ffmpeg_parameters,
         )
-        await self.calls.play(
-            chat_id,
-            stream,
-            GroupCallConfig(auto_start=self.config.auto_start_voice_chat),
+        await asyncio.wait_for(
+            self.calls.play(
+                chat_id,
+                stream,
+                GroupCallConfig(auto_start=self.config.auto_start_voice_chat),
+            ),
+            timeout=60,
         )
         if state.volume != 100:
             try:
@@ -303,8 +318,16 @@ class Player:
     async def volume(self, chat_id: int, volume: int) -> int:
         volume = max(1, min(200, int(volume)))
         state = self.state(chat_id)
+        if state.current is None:
+            raise RuntimeError("Nothing is playing")
         state.volume = volume
-        await self.calls.change_volume_call(chat_id, volume)
+        try:
+            await self.calls.change_volume_call(chat_id, volume)
+        except Exception as exc:  # pragma: no cover - depends on Telegram call state
+            logger.exception("Volume change failed in %s", chat_id)
+            raise RuntimeError(
+                "Volume change failed because no active stream is connected. Use /play first."
+            ) from exc
         return volume
 
     async def shuffle(self, chat_id: int) -> int:
