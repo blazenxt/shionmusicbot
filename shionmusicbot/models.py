@@ -18,6 +18,7 @@ class Track:
     thumbnail: str | None = None
     cleanup_path: Path | None = None
     is_live: bool = False
+    video: bool = False
     start_at: int = 0
     uid: str = ""
 

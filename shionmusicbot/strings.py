@@ -17,6 +17,7 @@ HELP_TEXT = """
 • <code>/play song name</code> — play from YouTube/search
 • <code>/play YouTube/link</code> — play a URL
 • <code>/play</code> — play replied audio/video
+• <code>/vplay song name</code> — play video in VC screen-share/presentation mode
 • <code>/playlist playlist-link</code> — queue a playlist
 • <code>/radio stream-url</code> — play a live radio/direct stream
 • <code>/queue</code> — show the queue

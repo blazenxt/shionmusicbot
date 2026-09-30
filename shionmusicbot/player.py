@@ -11,7 +11,7 @@ from typing import Deque
 
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from pytgcalls import filters as call_filters
-from pytgcalls.types import AudioQuality, GroupCallConfig, MediaStream, StreamEnded
+from pytgcalls.types import AudioQuality, GroupCallConfig, MediaStream, StreamEnded, VideoQuality
 
 from .models import Track
 from .utils import format_duration, html_user, split_text
@@ -25,6 +25,15 @@ class LoopMode:
     QUEUE = "queue"
 
     ALL = {OFF, ONE, QUEUE}
+
+
+class PresentationMediaStream(MediaStream):
+    """MediaStream variant that publishes video as VC presentation/screen share."""
+
+    async def check_stream(self):
+        await super().check_stream()
+        self.screen = self.camera
+        self.camera = None
 
 
 @dataclass(slots=True)
@@ -126,11 +135,19 @@ class Player:
         if track.start_at and track.start_at > 0:
             ffmpeg_parameters = f"--base ---start -ss {int(track.start_at)}"
 
-        logger.info("Playing in %s: %s", chat_id, track.title)
-        stream = MediaStream(
+        logger.info(
+            "Playing in %s: %s%s",
+            chat_id,
+            track.title,
+            " [video]" if track.video else "",
+        )
+        stream_type = PresentationMediaStream if track.video else MediaStream
+        stream = stream_type(
             track.source,
             audio_parameters=AudioQuality.HIGH,
-            video_flags=MediaStream.Flags.IGNORE,
+            video_parameters=VideoQuality.HD_720p,
+            audio_flags=MediaStream.Flags.REQUIRED,
+            video_flags=MediaStream.Flags.REQUIRED if track.video else MediaStream.Flags.IGNORE,
             ffmpeg_parameters=ffmpeg_parameters,
         )
         await asyncio.wait_for(
@@ -149,11 +166,13 @@ class Player:
         await self._send_now_playing(chat_id, track)
 
     async def _send_now_playing(self, chat_id: int, track: Track) -> None:
+        mode = "📺 Video / screen share" if track.video else "🎧 Audio"
         text = (
-            "<b>▶️ Now playing</b>\n\n"
-            f"<b>{track.display_title}</b>\n"
-            f"<b>Duration:</b> <code>{track.display_duration}</code>\n"
-            f"<b>Requested by:</b> {html_user(track.requester_id, track.requester_name)}"
+            "<b>╭─── ᴺᴼᵂ ᴾᴸᴬʸᴵᴺᴳ ───╮</b>\n"
+            f"<b>│ {track.display_title}</b>\n"
+            f"<b>│ Mode:</b> <code>{mode}</code>\n"
+            f"<b>│ Duration:</b> <code>{track.display_duration}</code>\n"
+            f"<b>╰ Requested by:</b> {html_user(track.requester_id, track.requester_name)}"
         )
         if track.start_at:
             text += f"\n<b>Seek:</b> <code>{format_duration(track.start_at)}</code>"
@@ -170,14 +189,14 @@ class Player:
         return InlineKeyboardMarkup(
             [
                 [
-                    InlineKeyboardButton("⏸ Pause", callback_data="shion:pause"),
-                    InlineKeyboardButton("▶️ Resume", callback_data="shion:resume"),
+                    InlineKeyboardButton("⏸ ᴘᴀᴜsᴇ", callback_data="shion:pause"),
+                    InlineKeyboardButton("▶ ʀᴇsᴜᴍᴇ", callback_data="shion:resume"),
                 ],
                 [
-                    InlineKeyboardButton("⏭ Skip", callback_data="shion:skip"),
-                    InlineKeyboardButton("⏹ Stop", callback_data="shion:stop"),
+                    InlineKeyboardButton("⏭ sᴋɪᴘ", callback_data="shion:skip"),
+                    InlineKeyboardButton("⏹ sᴛᴏᴘ", callback_data="shion:stop"),
                 ],
-                [InlineKeyboardButton("📜 Queue", callback_data="shion:queue")],
+                [InlineKeyboardButton("📜 ǫᴜᴇᴜᴇ", callback_data="shion:queue")],
             ]
         )
 
@@ -352,9 +371,11 @@ class Player:
             return None
         current = state.current
         paused = "Paused" if state.paused else "Playing"
+        icon = "📺" if current.video else "🎧"
         return (
-            f"<b>🎧 {paused}</b>\n\n"
+            f"<b>{icon} {paused}</b>\n\n"
             f"{current.line()}\n"
+            f"<b>Mode:</b> <code>{'video' if current.video else 'audio'}</code> | "
             f"<b>Loop:</b> <code>{state.loop}</code> | <b>Volume:</b> <code>{state.volume}</code>"
         )
 

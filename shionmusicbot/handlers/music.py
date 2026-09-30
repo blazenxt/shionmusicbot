@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from pyrogram import filters
 
@@ -17,6 +18,8 @@ from ..strings import (
     VC_JOIN_HINT,
 )
 from ..utils import format_duration, html_user, is_url, parse_duration, split_text
+
+logger = logging.getLogger(__name__)
 
 
 def _cmd(names: str | list[str]):
@@ -45,33 +48,40 @@ async def _play_allowed(client, message) -> bool:
     return await is_authorized_user(client, message.chat.id, user_id)
 
 
-async def _prepare_track(message, query: str) -> Track:
+async def _prepare_track(message, query: str, *, video: bool = False) -> Track:
     requester_id, requester_name = _requester(message)
     reply = message.reply_to_message
     if reply and not query:
-        return await downloader.from_telegram_reply(reply, requester_id, requester_name)
-    if not query:
+        track = await downloader.from_telegram_reply(reply, requester_id, requester_name)
+    elif query:
+        track = await downloader.resolve(query, requester_id, requester_name)
+    else:
         raise ValueError(NEED_QUERY)
-    return await downloader.resolve(query, requester_id, requester_name)
+    track.video = video
+    return track
 
 
-@bot.on_message(_cmd(["play", "p", "playforce", "fplay"]) & filters.group)
-@group_only
-async def play_handler(client, message):
-    if not await _play_allowed(client, message):
-        return await message.reply_text(NEED_ADMIN)
-
-    query = _args(message)
-    if not query and not message.reply_to_message:
-        return await message.reply_text(NEED_QUERY)
-
-    force = (message.command[0] or "").lower() in {"playforce", "fplay"}
-    status = await message.reply_text(SEARCHING)
+def _log_task_result(task: asyncio.Task) -> None:
     try:
-        track = await _prepare_track(message, query)
+        exc = task.exception()
+    except asyncio.CancelledError:
+        return
+    if exc:
+        logger.error("Background play task crashed", exc_info=(type(exc), exc, exc.__traceback__))
+
+
+async def _run_play_request(message, status, query: str, *, force: bool, video: bool) -> None:
+    try:
+        track = await _prepare_track(message, query, video=video)
         result = await player.add_track(message.chat.id, track, force=force)
     except Exception as exc:
-        return await status.edit_text(f"⚠️ <b>Error:</b> <code>{exc}</code>\n\n{VC_JOIN_HINT}")
+        logger.exception("Play request failed in %s", getattr(message.chat, "id", "unknown"))
+        text = f"⚠️ <b>Error:</b> <code>{exc}</code>\n\n{VC_JOIN_HINT}"
+        try:
+            await status.edit_text(text)
+        except Exception:
+            await message.reply_text(text)
+        return
 
     if result.started:
         try:
@@ -82,9 +92,29 @@ async def play_handler(client, message):
         await status.edit_text(
             "<b>➕ Added to queue</b>\n"
             f"{track.line()}\n"
+            f"<b>Mode:</b> <code>{'video' if track.video else 'audio'}</code>\n"
             f"<b>Position:</b> <code>{result.position}</code>",
             disable_web_page_preview=True,
         )
+
+
+@bot.on_message(_cmd(["play", "p", "playforce", "fplay", "vplay", "vstream"]) & filters.group)
+@group_only
+async def play_handler(client, message):
+    if not await _play_allowed(client, message):
+        return await message.reply_text(NEED_ADMIN)
+
+    query = _args(message)
+    if not query and not message.reply_to_message:
+        return await message.reply_text(NEED_QUERY)
+
+    command = (message.command[0] or "").lower()
+    force = command in {"playforce", "fplay"}
+    video = command in {"vplay", "vstream"}
+    status = await message.reply_text("📺 Preparing video stream..." if video else SEARCHING)
+    task = asyncio.create_task(_run_play_request(message, status, query, force=force, video=video))
+    task.add_done_callback(_log_task_result)
+    return None
 
 
 @bot.on_message(_cmd(["radio", "stream"]) & filters.group)
