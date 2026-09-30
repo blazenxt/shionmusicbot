@@ -3,9 +3,9 @@ from __future__ import annotations
 START_TEXT = """
 <b>🎧 Shion Music bot</b>
 
-Main Telegram group voice chats me high quality music stream kar sakta hoon.
-Assistant account ko group me add karo, voice chat start karo,
-fir <code>/play song name</code> use karo.
+I stream high-quality music in Telegram group voice chats.
+Add the assistant account to your group, start a voice chat, and use
+<code>/play song name</code> to begin.
 
 <b>Maintainer:</b> @blazenxt
 """.strip()
@@ -14,13 +14,13 @@ HELP_TEXT = """
 <b>🎧 Shion Music bot commands</b>
 
 <b>Music</b>
-• <code>/play song name</code> — YouTube/search se play
-• <code>/play YouTube/link</code> — URL play
-• <code>/play</code> — replied audio/video play
-• <code>/playlist playlist-link</code> — playlist queue
-• <code>/radio stream-url</code> — live radio/direct stream
-• <code>/queue</code> — queue dekho
-• <code>/now</code> — current song
+• <code>/play song name</code> — play from YouTube/search
+• <code>/play YouTube/link</code> — play a URL
+• <code>/play</code> — play replied audio/video
+• <code>/playlist playlist-link</code> — queue a playlist
+• <code>/radio stream-url</code> — play a live radio/direct stream
+• <code>/queue</code> — show the queue
+• <code>/now</code> — show the current track
 
 <b>Controls</b>
 • <code>/pause</code>, <code>/resume</code>
@@ -33,15 +33,15 @@ HELP_TEXT = """
 • <code>/join</code>, <code>/leave</code>
 
 <b>Admin / DJ</b>
-• <code>/auth</code> reply to user — DJ permission
+• <code>/auth</code> reply to user — grant DJ permission
 • <code>/unauth</code> reply to user
 • <code>/authusers</code>
 • <code>/dj on|off</code> — restrict /play to admins/auth users
 • <code>/settings</code>
 
 <b>Notes</b>
-Bot account commands handle karta hai.
-Assistant user account voice chat join karke audio stream karta hai.
+The bot account handles commands.
+The assistant user account joins the voice chat and streams audio.
 """.strip()
 
 ABOUT_TEXT = """
@@ -51,12 +51,12 @@ Open-source Telegram VC music bot made for @blazenxt.
 Tech: Python, Pyrogram, PyTgCalls, yt-dlp, FFmpeg.
 """.strip()
 
-NEED_GROUP = "Ye command group me use karo."
-NEED_ADMIN = "Is command ke liye admin ya authorized DJ hona zaroori hai."
+NEED_GROUP = "Use this command in a group."
+NEED_ADMIN = "This command requires an admin or an authorized DJ."
 NEED_QUERY = (
-    "Song name, link, ya replied audio/video do. Example: <code>/play faded alan walker</code>"
+    "Send a song name, link, or replied audio/video. Example: <code>/play faded alan walker</code>"
 )
 SEARCHING = "🔎 Searching / preparing track..."
-NO_QUEUE = "Queue empty hai."
-NOTHING_PLAYING = "Abhi kuch play nahi ho raha."
-VC_JOIN_HINT = "Voice chat start karo aur assistant account ko group me add/admin karo."
+NO_QUEUE = "The queue is empty."
+NOTHING_PLAYING = "Nothing is playing right now."
+VC_JOIN_HINT = "Start a voice chat and add/promote the assistant account in the group."

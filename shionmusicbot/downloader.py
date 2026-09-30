@@ -69,7 +69,7 @@ class Downloader:
             or getattr(reply, "document", None)
         )
         if media is None:
-            raise DownloadError("Reply audio, voice, video, ya document hona chahiye.")
+            raise DownloadError("Reply to an audio, voice, video, or document message.")
 
         file_size = getattr(media, "file_size", None)
         if file_size and file_size > self.max_file_size_mb * 1024 * 1024:

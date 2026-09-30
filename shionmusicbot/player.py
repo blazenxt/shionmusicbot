@@ -338,7 +338,7 @@ class Player:
     def queue_text(self, chat_id: int, *, limit: int = 10) -> str:
         state = self.state(chat_id)
         if not state.current and not state.queue:
-            return "Queue empty hai."
+            return "The queue is empty."
         lines = ["<b>📜 Queue</b>"]
         if state.current:
             lines.append("\n<b>Now:</b>")

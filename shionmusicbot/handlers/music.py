@@ -92,7 +92,7 @@ async def radio_handler(client, message):
     query = _args(message)
     if not query or not is_url(query):
         return await message.reply_text(
-            "Direct radio/stream URL do. Example: <code>/radio https://example.com/live.mp3</code>"
+            "Send a direct radio/stream URL. Example: <code>/radio https://example.com/live.mp3</code>"
         )
     requester_id, requester_name = _requester(message)
     track = Track(
@@ -126,7 +126,7 @@ async def playlist_handler(client, message):
     if not query and message.reply_to_message:
         query = message.reply_to_message.text or message.reply_to_message.caption or ""
     if not query:
-        return await message.reply_text("Playlist URL ya newline-separated song list do.")
+        return await message.reply_text("Send a playlist URL or a newline-separated song list.")
 
     requester_id, requester_name = _requester(message)
     status = await message.reply_text("📜 Resolving playlist...")
@@ -217,7 +217,7 @@ async def leave_handler(_, message):
 @group_only
 async def queue_handler(_, message):
     text = player.queue_text(message.chat.id)
-    if text == "Queue empty hai.":
+    if text == "The queue is empty.":
         return await message.reply_text(NO_QUEUE)
     for chunk in split_text(text):
         await message.reply_text(chunk, disable_web_page_preview=True)
@@ -309,7 +309,7 @@ async def auth_handler(client, message):
     target = await _target_user(client, message)
     if not target:
         return await message.reply_text(
-            "Reply to user ya user id/username do. Example: <code>/auth @user</code>"
+            "Reply to a user or provide a user ID/username. Example: <code>/auth @user</code>"
         )
     user_id, name = target
     await db.add_auth_user(message.chat.id, user_id)
@@ -321,7 +321,7 @@ async def auth_handler(client, message):
 async def unauth_handler(client, message):
     target = await _target_user(client, message)
     if not target:
-        return await message.reply_text("Reply to user ya user id/username do.")
+        return await message.reply_text("Reply to a user or provide a user ID/username.")
     user_id, name = target
     await db.remove_auth_user(message.chat.id, user_id)
     await message.reply_text(f"✅ Removed DJ permission: {html_user(user_id, name)}")
