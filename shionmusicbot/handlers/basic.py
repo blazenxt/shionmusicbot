@@ -20,7 +20,7 @@ def _cmd(names: str | list[str]):
 @bot.on_message(_cmd(["start", "alive"]))
 async def start_handler(_, message):
     markup = InlineKeyboardMarkup(
-        [[InlineKeyboardButton("📖 ʜᴇʟᴘ & ᴄᴏᴍᴍᴀɴᴅs", callback_data="shion:help")]]
+        [[InlineKeyboardButton("📖 ʜᴇʟᴘ & ᴄᴏᴍᴍᴀɴᴅs", callback_data="shion:help", style="primary")]]
     )
     await message.reply_text(START_TEXT, reply_markup=markup, disable_web_page_preview=True)
 

@@ -296,14 +296,14 @@ class Player:
         return InlineKeyboardMarkup(
             [
                 [
-                    InlineKeyboardButton("⏸ ᴘᴀᴜsᴇ", callback_data="shion:pause"),
-                    InlineKeyboardButton("▶ ʀᴇsᴜᴍᴇ", callback_data="shion:resume"),
+                    InlineKeyboardButton("⏸ ᴘᴀᴜsᴇ", callback_data="shion:pause", style="primary"),
+                    InlineKeyboardButton("▶ ʀᴇsᴜᴍᴇ", callback_data="shion:resume", style="success"),
                 ],
                 [
-                    InlineKeyboardButton("⏭ sᴋɪᴘ", callback_data="shion:skip"),
-                    InlineKeyboardButton("⏹ sᴛᴏᴘ", callback_data="shion:stop"),
+                    InlineKeyboardButton("⏭ sᴋɪᴘ", callback_data="shion:skip", style="primary"),
+                    InlineKeyboardButton("⏹ sᴛᴏᴘ", callback_data="shion:stop", style="danger"),
                 ],
-                [InlineKeyboardButton("📜 ǫᴜᴇᴜᴇ", callback_data="shion:queue")],
+                [InlineKeyboardButton("📜 ǫᴜᴇᴜᴇ", callback_data="shion:queue", style="primary")],
             ]
         )
 
