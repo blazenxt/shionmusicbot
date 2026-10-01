@@ -124,18 +124,34 @@ class Player:
                 if "already" in raw or "participant" in raw or "user_already" in raw:
                     await self._refresh_assistant_peer(app, chat_id)
                     return
-                join_errors.append(str(exc))
+                # Some PyrogramMod builds successfully join a public chat but then
+                # raise while parsing Telegram's join result. Re-check membership
+                # before falling back to invite-link export.
+                try:
+                    await self._refresh_assistant_peer(app, chat_id)
+                    await app.get_chat_member(chat_id, (await app.get_me()).id)
+                    logger.info(
+                        "Assistant public join for %s succeeded after parse warning: %s",
+                        chat_id,
+                        exc,
+                    )
+                    return
+                except Exception:
+                    pass
+                join_errors.append(type(exc).__name__)
                 logger.debug("Assistant public join failed for %s: %s", chat_id, exc)
 
         try:
             invite = await self.bot.export_chat_invite_link(chat_id)
         except Exception as exc:
-            details = f" Public join failed: {'; '.join(join_errors)}" if join_errors else ""
-            raise RuntimeError(
+            hint = (
                 "Assistant is not in this group and I could not create an invite link. "
-                "Promote the bot with Invite Users/Add Members permission, then use "
-                "/play again. For private groups this permission is required." + details
-            ) from exc
+                "Promote the bot as admin with Invite Users/Add Members permission, "
+                "then use /play again. For private groups this permission is required."
+            )
+            if join_errors:
+                hint += f" Public join fallback failed: {', '.join(join_errors)}."
+            raise RuntimeError(hint) from exc
 
         try:
             await app.join_chat(invite)
