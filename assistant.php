@@ -92,6 +92,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             set_time_limit(120);
             if ($action === 'send') {
                 $result = sh_auth_helper(array('action' => 'send', 'phone' => (string) ($_POST['phone'] ?? '')));
+            } elseif ($action === 'resend') {
+                $result = sh_auth_helper(array('action' => 'resend'));
             } elseif ($action === 'verify') {
                 $result = sh_auth_helper(array('action' => 'verify', 'code' => (string) ($_POST['code'] ?? '')));
             } elseif ($action === 'password') {
@@ -143,11 +145,21 @@ $st = sh_web_status();
 $assistant_ready = is_array($st) && !empty($st['assistant_ready']) && time() - (int) ($st['ts'] ?? 0) < 90;
 
 $me = null;
+$bot_api_label = 'unreachable';
 if ($token !== '') {
     $resp = sh_http_get('https://api.telegram.org/bot' . rawurlencode($token) . '/getMe', 10);
     $data = json_decode($resp['body'], true);
     $me = is_array($data) && !empty($data['ok']) ? ($data['result'] ?? null) : null;
+    if ($me !== null) {
+        $bot_api_label = 'online';
+    } elseif (is_array($data) && (int) ($data['error_code'] ?? 0) === 429) {
+        $bot_api_label = 'rate limited';
+    } elseif (is_array($data) && (int) ($data['error_code'] ?? 0) === 401) {
+        $bot_api_label = 'token rejected';
+    }
 }
+$session_ok = $session_configured && !$login_required;
+$session_label = $login_required ? 'needs replacement' : ($session_configured ? 'yes' : 'no');
 
 sh_header('assistant', 'Assistant Manager', 'Secure Telegram login, private session storage and automatic bot restart.');
 ?>
@@ -161,13 +173,13 @@ sh_header('assistant', 'Assistant Manager', 'Secure Telegram login, private sess
     <h3><?php echo sh_icon('bot', 16); ?> Bot account</h3>
     <div class="kv"><span class="k">Username</span><span class="mono">@<?php echo sh_h((string) ($me['username'] ?? $bot)); ?></span></div>
     <div class="kv"><span class="k">ID</span><span class="mono"><?php echo sh_h((string) ($me['id'] ?? '—')); ?></span></div>
-    <div class="kv"><span class="k">Bot API</span><?php echo sh_badge($me !== null, $me !== null ? 'online' : 'unreachable'); ?></div>
+    <div class="kv"><span class="k">Bot API</span><?php echo sh_badge($me !== null, $bot_api_label); ?></div>
   </div>
   <div class="card">
     <h3><?php echo sh_icon('headphones', 16); ?> Assistant account</h3>
     <div class="kv"><span class="k">Username</span><span class="mono">@<?php echo sh_h($assistant); ?></span></div>
     <div class="kv"><span class="k">ID</span><span class="mono"><?php echo sh_h($assistant_id !== '' ? $assistant_id : '—'); ?></span></div>
-    <div class="kv"><span class="k">Session stored</span><?php echo sh_badge($session_configured, $session_configured ? 'yes' : 'no'); ?></div>
+    <div class="kv"><span class="k">Session</span><?php echo sh_badge($session_ok, $session_label); ?></div>
   </div>
   <div class="card">
     <h3><?php echo sh_icon('pulse', 16); ?> Voice engine</h3>
@@ -211,6 +223,7 @@ sh_header('assistant', 'Assistant Manager', 'Secure Telegram login, private sess
       <input id="code" name="code" inputmode="numeric" pattern="[0-9 ]{4,12}" required placeholder="12345">
       <button class="btn btn-primary" type="submit">Verify code</button>
     </div>
+    <p class="muted">Use the newest code from Telegram. Requesting another code immediately invalidates every older code.</p>
   </form>
   <?php } elseif ($step === 'password') { ?>
   <form method="post" autocomplete="off" class="auth-form">
@@ -233,6 +246,14 @@ sh_header('assistant', 'Assistant Manager', 'Secure Telegram login, private sess
       <input id="phone" name="phone" type="tel" required autocomplete="tel" placeholder="+919876543210">
       <button class="btn btn-primary" type="submit">Send login code</button>
     </div>
+  </form>
+  <?php } ?>
+
+  <?php if ($unlocked && $step === 'code') { ?>
+  <form method="post" class="inline-form mt">
+    <input type="hidden" name="csrf" value="<?php echo sh_h((string) $_SESSION['csrf']); ?>">
+    <input type="hidden" name="action" value="resend">
+    <button class="btn btn-primary" type="submit">Send a new code</button>
   </form>
   <?php } ?>
 

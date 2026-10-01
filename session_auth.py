@@ -183,6 +183,16 @@ async def send_code(payload: dict[str, Any], env: dict[str, str]) -> dict[str, A
             await app.disconnect()
 
 
+async def resend_code(env: dict[str, str]) -> dict[str, Any]:
+    """Invalidate the previous code and send a fresh one to the same phone."""
+    state = read_json(STATE_FILE, {})
+    phone = str(state.get("phone", ""))
+    if not re.fullmatch(r"\+\d{7,15}", phone):
+        cleanup_pending()
+        return {"ok": False, "error": "Login request is missing. Start again with the phone number."}
+    return await send_code({"phone": phone}, env)
+
+
 async def verify_code(payload: dict[str, Any], env: dict[str, str]) -> dict[str, Any]:
     allowed, error = rate_limit("verify")
     if not allowed:
@@ -261,6 +271,8 @@ async def run(payload: dict[str, Any]) -> dict[str, Any]:
     action = str(payload.get("action", "status"))
     if action == "send":
         return await send_code(payload, env)
+    if action == "resend":
+        return await resend_code(env)
     if action == "verify":
         return await verify_code(payload, env)
     if action == "password":
