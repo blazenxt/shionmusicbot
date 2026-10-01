@@ -50,6 +50,24 @@ else
   exit 1
 fi
 
+say "linking ffprobe"
+if command -v ffprobe >/dev/null 2>&1; then
+  ln -sfn "$(command -v ffprobe)" "$RUNTIME/bin/ffprobe"
+elif [ ! -x "$RUNTIME/bin/ffprobe" ]; then
+  archive="$RUNTIME/ffmpeg-static.tar.xz"
+  if curl -fsSL --retry 3 --connect-timeout 20 \
+      https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz \
+      -o "$archive"; then
+    tar -xJf "$archive" -C "$RUNTIME/bin" --strip-components=1 --wildcards '*/ffprobe' || true
+    rm -f "$archive"
+  fi
+fi
+if [ ! -x "$RUNTIME/bin/ffprobe" ]; then
+  say "ERROR: ffprobe is required by PyTgCalls"
+  exit 1
+fi
+chmod +x "$RUNTIME/bin/ffprobe" 2>/dev/null || true
+
 # Keep the venv path out of the long-running process argv. Besides making
 # launches uniform, this prevents stale deployment jobs that target an old
 # venv command line from terminating the production process.

@@ -9,6 +9,7 @@ import logging
 import logging.handlers
 import os
 import pkgutil
+import signal
 import sys
 import time
 
@@ -230,6 +231,33 @@ async def _start_bot_with_backoff(assistant_ready: bool) -> None:
                 await asyncio.sleep(min(20, remaining))
 
 
+async def _protected_idle() -> None:
+    """Ignore unsolicited SIGTERM while allowing dashboard-controlled stops."""
+    stop_event = asyncio.Event()
+    marker = dirutil.RUNTIME / "allow_stop"
+    loop = asyncio.get_running_loop()
+
+    def handle(signum: int) -> None:
+        authorized = False
+        try:
+            authorized = marker.is_file() and time.time() - marker.stat().st_mtime < 120
+        except OSError:
+            pass
+        if authorized or signum in (signal.SIGINT, signal.SIGABRT):
+            marker.unlink(missing_ok=True)
+            log.info("Authorized stop signal received (%s)", signal.Signals(signum).name)
+            stop_event.set()
+        else:
+            log.warning("Ignored unsolicited stop signal (%s)", signal.Signals(signum).name)
+
+    for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGABRT):
+        try:
+            loop.add_signal_handler(signum, handle, signum)
+        except (NotImplementedError, RuntimeError):
+            signal.signal(signum, lambda sig, _frame: handle(sig))
+    await stop_event.wait()
+
+
 async def main() -> None:
     dirutil.ensure_dirs()
     setup_logging()
@@ -256,9 +284,7 @@ async def main() -> None:
 
     writer = asyncio.create_task(status_writer(assistant_ready))
 
-    from pyrogram import idle
-
-    await idle()
+    await _protected_idle()
 
     log.info("Shutting down")
     writer.cancel()

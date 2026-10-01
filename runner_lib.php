@@ -107,6 +107,11 @@ function sh_stop_bot(): void
         @unlink(sh_runtime_dir() . '/bot.pid');
         return;
     }
+    // The daemon ignores unsolicited SIGTERM from stale deployment actors.
+    // This short-lived private marker authorizes an intentional dashboard stop.
+    $stopMarker = sh_runtime_dir() . '/allow_stop';
+    @file_put_contents($stopMarker, (string) time());
+    @chmod($stopMarker, 0600);
     if (function_exists('posix_kill')) {
         @posix_kill($pid, 15);
     } else {
@@ -119,6 +124,7 @@ function sh_stop_bot(): void
         function_exists('posix_kill') ? @posix_kill($pid, 9) : sh_run('kill -9 ' . $pid);
     }
     @unlink(sh_runtime_dir() . '/bot.pid');
+    @unlink(sh_runtime_dir() . '/allow_stop');
 }
 
 function sh_start_bot(): bool
