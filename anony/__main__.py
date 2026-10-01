@@ -37,9 +37,10 @@ def setup_logging() -> None:
     file_handler.setFormatter(fmt)
     root.addHandler(file_handler)
 
-    stream_handler = logging.StreamHandler(sys.stdout)
-    stream_handler.setFormatter(fmt)
-    root.addHandler(stream_handler)
+    if sys.stdout.isatty():
+        stream_handler = logging.StreamHandler(sys.stdout)
+        stream_handler.setFormatter(fmt)
+        root.addHandler(stream_handler)
 
     for noisy in ("pyrogram", "pytgcalls", "ntgcalls", "urllib3"):
         logging.getLogger(noisy).setLevel(logging.WARNING)

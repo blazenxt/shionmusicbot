@@ -126,13 +126,15 @@ function sh_start_bot(): bool
     @mkdir($runtime, 0700, true);
     @mkdir($runtime . '/data', 0700, true);
     $python = sh_python();
-    $cmd = 'cd ' . escapeshellarg(__DIR__)
-        . ' && export SHION_RUNTIME_DIR=' . escapeshellarg($runtime)
-        . ' && export PATH=' . escapeshellarg($runtime . '/bin') . ':$PATH'
-        . ' && nohup ' . escapeshellarg($python) . ' -m anony >> '
-        . escapeshellarg($runtime . '/bot.log') . ' 2>&1 < /dev/null & echo $! > '
-        . escapeshellarg($runtime . '/bot.pid');
-    @shell_exec('bash -c ' . escapeshellarg($cmd));
+    $cmd = 'cd ' . escapeshellarg(__DIR__) . ' || exit 1; '
+        . 'export SHION_RUNTIME_DIR=' . escapeshellarg($runtime) . '; '
+        . 'export PATH=' . escapeshellarg($runtime . '/bin') . ':$PATH; '
+        . 'nohup ' . escapeshellarg($python) . ' -m anony >> '
+        . escapeshellarg($runtime . '/bot.log') . ' 2>&1 < /dev/null & '
+        . 'echo $! > ' . escapeshellarg($runtime . '/bot.pid');
+    // Redirect the launcher shell itself so PHP never keeps an inherited pipe
+    // open for the lifetime of the background Python process.
+    @shell_exec('bash -c ' . escapeshellarg($cmd) . ' >/dev/null 2>&1');
     usleep(800000);
     return sh_proc_running();
 }

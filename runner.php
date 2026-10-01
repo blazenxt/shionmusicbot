@@ -31,11 +31,11 @@ switch ($action) {
 
     case 'bootstrap':
         @mkdir($runtime, 0700, true);
-        $cmd = 'cd ' . escapeshellarg(__DIR__)
-            . ' && export SHION_RUNTIME_DIR=' . escapeshellarg($runtime)
-            . ' && nohup bash bootstrap.sh >> ' . escapeshellarg($runtime . '/install.log')
+        $cmd = 'cd ' . escapeshellarg(__DIR__) . ' || exit 1; '
+            . 'export SHION_RUNTIME_DIR=' . escapeshellarg($runtime) . '; '
+            . 'nohup bash bootstrap.sh >> ' . escapeshellarg($runtime . '/install.log')
             . ' 2>&1 < /dev/null &';
-        @shell_exec('bash -c ' . escapeshellarg($cmd));
+        @shell_exec('bash -c ' . escapeshellarg($cmd) . ' >/dev/null 2>&1');
         echo "bootstrap started\n";
         break;
 
