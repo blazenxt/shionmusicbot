@@ -1,0 +1,17 @@
+# ShionMusicBot — web dashboard access control (LiteSpeed/Apache compatible)
+
+Options -Indexes
+
+# ── deny runtime & sensitive files ────────────────────────────────────
+<FilesMatch "(^\.|\.(env|log|json|py|pyc|sh|md|txt|gz|zip|tar|xz|session|tmp|part|lock|pid|bak|old|dist|whl)$|^requirements|^runner_lib\.php$|^installer\.php$|^pytest\.ini$|^config\.py$)">
+  <IfModule mod_authz_core.c>
+    Require all denied
+  </IfModule>
+  <IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+  </IfModule>
+</FilesMatch>
+
+# ── deny runtime directories (paths under this app) ───────────────────
+RedirectMatch 404 ^/.*/(anony|cache|downloads|data|venv|bin|tests|inc|\.git)(/|$)

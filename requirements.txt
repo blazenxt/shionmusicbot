@@ -1,0 +1,20 @@
+# ShionMusicBot — pinned production dependencies.
+#
+# Streaming engine : PyTgCalls v3 (py-tgcalls) + NTgCalls v3 native binding
+# MTProto clients  : pyrogrammod (Pyrogram v2 API compatible fork)
+#
+# NOTE: Python >= 3.10 is required by py-tgcalls / ntgcalls.
+py-tgcalls[pyrogram]==3.0.0
+
+# HTTP engine for the Testweb3 YouTube proxy
+aiohttp>=3.9,<4
+
+# .env file loading
+python-dotenv>=1.0,<2
+
+# resource metrics for /stats and the web dashboard
+psutil>=5.9
+
+# Optional accelerator for Pyrogram crypto (auto-skipped if the wheel
+# is unavailable for your platform; the bot falls back to pure-python).
+tgcrypto>=1.2.5; python_version < "3.13"

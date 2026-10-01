@@ -1,0 +1,41 @@
+# ── secrets (never commit) ────────────────────────────────────────────────
+.env
+*.env
+!.env.example
+
+# ── runtime artefacts ─────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.cache/
+
+# sessions & state
+*.session
+*.session-journal
+data/
+cache/
+downloads/
+web_status.json
+state.json
+plays.log
+
+# logs
+*.log
+
+# deploy artefacts
+deploy.zip
+*.tar.gz
+server_info.txt
+_recon.sh
+diag.php
+installer.php
+
+# virtual environments
+venv/
+.venv/
+
+# editor / os noise
+.idea/
+.vscode/
+.DS_Store
