@@ -1,13 +1,4 @@
-"""ShionMusicBot entrypoint — ``python3 -m anony``.
-
-Boot sequence
--------------
-1. ensure runtime directories + logging
-2. validate configuration (explicit errors on missing credentials)
-3. restore persisted state, start assistant → bot → PyTgCalls
-4. wire the stream-end hook to the queue engine
-5. start the dashboard metrics writer, then idle until shutdown
-"""
+"""ShionMusicBot entrypoint — ``python3 -m anony``."""
 
 from __future__ import annotations
 
@@ -37,6 +28,8 @@ def setup_logging() -> None:
     )
     root = logging.getLogger()
     root.setLevel(logging.INFO)
+    if root.handlers:
+        root.handlers.clear()
 
     file_handler = logging.handlers.RotatingFileHandler(
         dirutil.LOG_FILE, maxBytes=2_000_000, backupCount=3, encoding="utf-8"
@@ -52,7 +45,14 @@ def setup_logging() -> None:
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
-async def _build_status(active_chats: list, queues: dict) -> dict:
+def _write_private_json(name: str, payload: dict) -> None:
+    path = dirutil.RUNTIME / name
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+async def _build_status(active_chats: list, queues: dict, assistant_ready: bool) -> dict:
     try:
         import psutil
 
@@ -61,7 +61,7 @@ async def _build_status(active_chats: list, queues: dict) -> dict:
         mem = process.memory_info().rss / 1_048_576
         sys_cpu = psutil.cpu_percent(interval=None)
         sys_mem = psutil.virtual_memory().percent
-    except Exception:  # noqa: BLE001 - metrics are best effort
+    except Exception:
         cpu = mem = sys_cpu = sys_mem = -1
 
     import pyrogram
@@ -75,6 +75,7 @@ async def _build_status(active_chats: list, queues: dict) -> dict:
         "pid": os.getpid(),
         "bot": f"@{getattr(bot, 'username', config.BOT_USERNAME)}",
         "assistant": f"@{config.ASSISTANT_USERNAME}",
+        "assistant_ready": assistant_ready,
         "py": sys.version.split()[0],
         "pyrogram": pyrogram.__version__,
         "pytgcalls": pytgcalls.__version__,
@@ -90,74 +91,122 @@ async def _build_status(active_chats: list, queues: dict) -> dict:
     }
 
 
-async def status_writer() -> None:
-    """Publish ``web_status.json`` for the web dashboard every 20 s."""
+async def status_writer(assistant_ready: bool) -> None:
     from anony.helpers._queue import queue
 
     while True:
         try:
-            active = await call.active_chats()
+            active = await call.active_chats() if assistant_ready else []
             queues = {str(cid): len(items) for cid, items in queue.all().items()}
-            payload = await _build_status(active, queues)
+            payload = await _build_status(active, queues, assistant_ready)
             tmp = str(dirutil.WEB_STATUS) + ".tmp"
             with open(tmp, "w", encoding="utf-8") as fh:
                 json.dump(payload, fh)
             os.replace(tmp, str(dirutil.WEB_STATUS))
         except asyncio.CancelledError:
             raise
-        except Exception:  # noqa: BLE001
+        except Exception:
             log.exception("status writer iteration failed")
         await asyncio.sleep(20)
+
+
+async def _start_assistant() -> bool:
+    if not config.assistant_session:
+        dirutil.SESSION_REQUIRED.touch(exist_ok=True)
+        log.warning("Assistant session is not configured; starting bot-only mode.")
+        return False
+    if dirutil.SESSION_REQUIRED.exists():
+        log.warning("Assistant session needs login; starting bot-only mode.")
+        return False
+
+    try:
+        await asyncio.wait_for(userbot.start(), timeout=45)
+        await asyncio.wait_for(call.start(), timeout=45)
+        call.on_stream_end(on_stream_end)
+        dirutil.SESSION_REQUIRED.unlink(missing_ok=True)
+        (dirutil.RUNTIME / "assistant_error.json").unlink(missing_ok=True)
+        return True
+    except Exception as exc:
+        message = str(exc)
+        auth_failure = any(
+            token in message.lower()
+            for token in (
+                "auth key",
+                "unauthorized",
+                "session revoked",
+                "session expired",
+                "user deactivated",
+                "keyerror: 5",
+            )
+        )
+        if auth_failure:
+            dirutil.SESSION_REQUIRED.touch(exist_ok=True)
+        _write_private_json(
+            "assistant_error.json",
+            {
+                "ts": int(time.time()),
+                "type": type(exc).__name__,
+                "message": message[:500],
+                "login_required": auth_failure,
+            },
+        )
+        log.exception("Assistant startup failed; continuing in bot-only mode")
+        try:
+            await userbot.stop()
+        except Exception:
+            pass
+        return False
 
 
 async def main() -> None:
     dirutil.ensure_dirs()
     setup_logging()
 
-    problems = validate()
+    problems = validate(require_assistant=False)
     if problems:
         for problem in problems:
             log.error("Configuration error: %s", problem)
-        sys.exit(1)
+        raise SystemExit(1)
 
-    log.info("ShionMusicBot v%s booting…", anony.__version__)
+    log.info("ShionMusicBot v%s booting", anony.__version__)
     db.load()
 
-    # Assistant first — PyTgCalls wraps it and completes the start if needed.
-    await userbot.start()
+    assistant_ready = await _start_assistant()
     await bot.start()
-
-    if config.assistant_session:
-        await call.start()
-        call.on_stream_end(on_stream_end)
-    else:
-        log.warning("Skipping PyTgCalls start (no assistant session configured).")
 
     import anony.plugins
 
     plugin_count = len(list(pkgutil.iter_modules(anony.plugins.__path__)))
-    log.info("Loaded %d modules.", plugin_count)
+    log.info("Loaded %d modules; assistant_ready=%s", plugin_count, assistant_ready)
 
-    writer = asyncio.create_task(status_writer())
+    writer = asyncio.create_task(status_writer(assistant_ready))
 
     from pyrogram import idle
 
     await idle()
 
-    log.info("Shutting down…")
+    log.info("Shutting down")
     writer.cancel()
     try:
-        await asyncio.wait_for(call.stop_all(), timeout=10)
-    except Exception:  # noqa: BLE001
+        await writer
+    except asyncio.CancelledError:
         pass
+
+    if assistant_ready:
+        try:
+            await asyncio.wait_for(call.stop_all(), timeout=10)
+        except Exception:
+            pass
     db.save()
-    for client, name in ((bot, "bot"), (userbot, "assistant")):
+    for client, enabled in ((bot, True), (userbot, assistant_ready)):
+        if not enabled:
+            continue
         try:
             await client.stop()
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
     await youtube.close()
-    log.info("Shutdown complete. Goodbye!")
+    log.info("Shutdown complete")
 
 
 if __name__ == "__main__":

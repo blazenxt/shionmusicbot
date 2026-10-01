@@ -24,6 +24,7 @@ plays.log
 *.log
 
 # deploy artefacts
+.runtime/
 deploy.zip
 *.tar.gz
 server_info.txt

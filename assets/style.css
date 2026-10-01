@@ -176,7 +176,28 @@ code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monosp
 .playercard img { width: 100%; max-width: 340px; border-radius: 12px; margin: .6rem auto; display: block; object-fit: cover; max-height: 190px; }
 audio { width: 100%; margin-top: .8rem; }
 
+/* ── secure assistant login ─────────────────────────────── */
+.btn-primary { background: linear-gradient(135deg, #7c3aed, #4f46e5); border-color: transparent; }
+.notice { padding: .8rem 1rem; border-radius: 12px; border: 1px solid var(--line); font-weight: 600; }
+.notice-ok { color: #a7f3d0; background: rgba(52, 211, 153, .1); border-color: rgba(52, 211, 153, .3); }
+.notice-bad { color: #fecaca; background: rgba(248, 113, 113, .1); border-color: rgba(248, 113, 113, .3); }
+.auth-card { padding: 1.35rem; }
+.auth-form { margin-top: 1rem; max-width: 720px; }
+.auth-form label { display: block; color: var(--muted); font-weight: 700; font-size: .82rem; margin-bottom: .45rem; }
+.form-row { display: flex; gap: .65rem; align-items: center; }
+.form-row input {
+  flex: 1; min-width: 0; background: #0b0e17; color: var(--text); border: 1px solid var(--line);
+  border-radius: 11px; padding: .78rem .9rem; font: inherit; outline: none;
+}
+.form-row input:focus { border-color: rgba(124, 58, 237, .75); box-shadow: 0 0 0 3px rgba(124, 58, 237, .16); }
+.inline-form { margin: 0; }
+.mt { margin-top: .9rem; }
+.steps { margin: .3rem 0 0; padding-left: 1.25rem; color: var(--muted); }
+.steps li { padding: .22rem 0; }
+
 @media (max-width: 720px) {
   .bar-inner { height: auto; padding: .6rem 0; flex-wrap: wrap; }
   .nav { margin-left: 0; width: 100%; order: 3; }
+  .form-row { align-items: stretch; flex-direction: column; }
+  .form-row .btn { justify-content: center; }
 }

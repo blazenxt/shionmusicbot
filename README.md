@@ -28,8 +28,9 @@ shared CyberPanel hosting with zero external database dependencies.
   and JSON snapshot persistence across restarts.
 - **Multilingual** — English & हिन्दी, switchable per chat.
 - **MPA web dashboard** — Landing, Live Status/Ping console, Command Explorer,
-  Assistant Manager and a Web Audio Streamer. 100% vector SVG icons, zero
-  external CDNs, zero broken assets.
+  a manager-key-protected Assistant Login flow (phone → OTP → optional 2FA),
+  and a Web Audio Streamer. Session strings are written only to the private
+  runtime outside `public_html`.
 - **Self-healing** — cron watchdog + `runner.php` control endpoint.
 
 ## 📦 Project layout
@@ -53,11 +54,12 @@ ShionMusicBot/
 ├── index.php                 # dashboard: landing
 ├── status.php                # dashboard: live status & log console
 ├── commands.php              # dashboard: command explorer
-├── assistant.php             # dashboard: assistant manager
+├── assistant.php             # secure phone/OTP/2FA assistant manager
+├── session_auth.py           # private-stdin Telegram login bridge
 ├── webstream.php             # dashboard: web audio streamer
 ├── runner.php                # key-protected process control endpoint
-├── ensure-running.sh         # 1-minute cron watchdog
-├── bootstrap.sh              # venv + pip + static ffmpeg installer
+├── ensure-running.sh         # PID-safe 1-minute cron watchdog
+├── bootstrap.sh              # private venv + bundled ffmpeg installer
 ├── installer.php             # one-time deployment installer
 ├── requirements.txt          # py-tgcalls[pyrogram]==3.0.0 stack
 ├── tests/                    # pytest suite (55 tests)
@@ -76,12 +78,11 @@ ShionMusicBot/
 
 ## ⚙️ Configuration (`.env`)
 
-See [`.env.example`](.env.example) — keys: `API_ID`, `API_HASH`, `BOT_TOKEN`,
-`BOT_USERNAME`, `OWNER_ID`, `OWNER_USERNAME`, `SESSION1`/`SESSION_STRING`
-(assistant Pyrogram v2 session), `ASSISTANT_ID`, `ASSISTANT_USERNAME`,
-`SUPPORT_CHANNEL`, `SUPPORT_CHAT`, `YT_API_BASE`, `DURATION_LIMIT`,
-`QUEUE_LIMIT`, `PLAYLIST_LIMIT`, `AUTO_LEAVE`, `AUTO_END`, `THUMB_GEN`,
-`VIDEO_PLAY`, `LANG_CODE`, `RUNNER_KEY`.
+See [`.env.example`](.env.example). In production the file is stored at
+`~/private/shionmusicbot_runtime/bot.env`, never in the web root. Along with
+Telegram and playback settings it contains independent `RUNNER_KEY` and
+`SESSION_MANAGER_KEY` secrets. The Assistant Manager atomically replaces
+`SESSION1` and `SESSION_STRING` after a successful Telegram login.
 
 ## 🧰 Stack
 
@@ -93,8 +94,9 @@ See [`.env.example`](.env.example) — keys: `API_ID`, `API_HASH`, `BOT_TOKEN`,
 | State | in-memory engine + JSON snapshots |
 | Web | plain MPA PHP (LiteSpeed compatible), inline SVG |
 
-Requires **Python ≥ 3.10** and an `ffmpeg` binary (bootstrap.sh downloads a
-static build into `./bin` when the system has none).
+Requires **Python ≥ 3.10**. `bootstrap.sh` installs dependencies into the
+private runtime virtualenv and links the `imageio-ffmpeg` bundled binary into
+the private runtime `bin/` directory.
 
 ## 🛠 Local development
 
@@ -107,10 +109,13 @@ venv/bin/python -m anony   # run the bot
 
 ## 🔐 Web endpoints
 
-- `index.php`, `status.php`, `commands.php`, `assistant.php`, `webstream.php` — public dashboard pages
-- `runner.php?key=…&action=diag|bootstrap|start|stop|restart|ensure|status|log` —
-  key-protected daemon control
-- `.htaccess` denies every runtime file (`.env`, logs, code, venv, data)
+- `index.php`, `status.php`, `commands.php`, `webstream.php` — public dashboard pages
+- `assistant.php` — management actions require the private manager key, CSRF
+  token, short-lived secure session cookie and server-side rate limits
+- `runner.php` — actions require `X-Runner-Key` (query-key fallback is retained
+  for manual diagnostics)
+- `.htaccess` denies source, secrets, logs, archives and runtime directories;
+  mutable runtime data is additionally kept outside `public_html`
 
 ---
 

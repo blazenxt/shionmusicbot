@@ -36,6 +36,7 @@ class Userbot(Client):
             api_id=config.API_ID,
             api_hash=config.API_HASH,
             session_string=session_string or config.assistant_session or None,
+            in_memory=True,
             parse_mode=enums.ParseMode.MARKDOWN,
             workdir=str(BASE_DIR),
         )

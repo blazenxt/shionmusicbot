@@ -1,17 +1,20 @@
-# ShionMusicBot — web dashboard access control (LiteSpeed/Apache compatible)
-
+# ShionMusicBot — OpenLiteSpeed/Apache access controls
 Options -Indexes
+RewriteEngine On
 
-# ── deny runtime & sensitive files ────────────────────────────────────
-<FilesMatch "(^\.|\.(env|log|json|py|pyc|sh|md|txt|gz|zip|tar|xz|session|tmp|part|lock|pid|bak|old|dist|whl)$|^requirements|^runner_lib\.php$|^installer\.php$|^pytest\.ini$|^config\.py$)">
-  <IfModule mod_authz_core.c>
-    Require all denied
-  </IfModule>
-  <IfModule !mod_authz_core.c>
-    Order allow,deny
-    Deny from all
-  </IfModule>
+# Never serve dot-files, source, secrets, logs, archives or runtime artefacts.
+RewriteRule "(^|/)\." - [F,L]
+RewriteRule "\.(env|log|json|py|pyc|sh|md|txt|ini|toml|ya?ml|gz|zip|tar|xz|session|tmp|part|lock|pid|bak|old|dist|whl)$" - [F,L,NC]
+RewriteRule "^(anony|cache|downloads|data|venv|bin|tests|inc|docs|scripts|\.runtime|\.git)(/|$)" - [R=404,L,NC]
+RewriteRule "^(runner_lib\.php|session_auth\.py|pytest\.ini|requirements.*|bootstrap\.sh|ensure-running\.sh)$" - [F,L,NC]
+
+<FilesMatch "^(\.env|\.env\..*|runner_lib\.php|session_auth\.py)$">
+  Require all denied
 </FilesMatch>
 
-# ── deny runtime directories (paths under this app) ───────────────────
-RedirectMatch 404 ^/.*/(anony|cache|downloads|data|venv|bin|tests|inc|\.git)(/|$)
+<IfModule mod_headers.c>
+  Header always set X-Content-Type-Options "nosniff"
+  Header always set Referrer-Policy "same-origin"
+  Header always set X-Frame-Options "SAMEORIGIN"
+  Header always set Permissions-Policy "camera=(), microphone=(), geolocation=()"
+</IfModule>

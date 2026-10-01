@@ -5,6 +5,7 @@
 #
 # NOTE: Python >= 3.10 is required by py-tgcalls / ntgcalls.
 py-tgcalls[pyrogram]==3.0.0
+pyrogrammod>=2.4.1,<3
 
 # HTTP engine for the Testweb3 YouTube proxy
 aiohttp>=3.9,<4
@@ -14,6 +15,9 @@ python-dotenv>=1.0,<2
 
 # resource metrics for /stats and the web dashboard
 psutil>=5.9
+
+# Bundled ffmpeg binary for hosts without a system ffmpeg package
+imageio-ffmpeg>=0.6,<1
 
 # Optional accelerator for Pyrogram crypto (auto-skipped if the wheel
 # is unavailable for your platform; the bot falls back to pure-python).

@@ -10,8 +10,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-os.environ.setdefault("API_ID", "35458756")
-os.environ.setdefault("API_HASH", "eac538ffbeb1c5a039a9a9e6ff293149")
+os.environ.setdefault("API_ID", "12345678")
+os.environ.setdefault("API_HASH", "0123456789abcdef0123456789abcdef")
 os.environ.setdefault("BOT_TOKEN", "123456:TEST-token-for-imports")
 os.environ.setdefault("BOT_USERNAME", "ShionMusicBot")
 os.environ.setdefault("OWNER_ID", "7330774855")

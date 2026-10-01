@@ -1,26 +1,42 @@
-"""
-ShionMusicBot — environment configuration loader.
+"""ShionMusicBot environment configuration.
 
-Reads configuration from environment variables and the optional ``.env``
-file located next to this module.  Every value has a safe default so that
-importing this module never raises; call :func:`validate` in the boot
-sequence for explicit, human friendly errors on missing credentials.
+Production secrets and mutable data live outside ``public_html`` in
+``~/private/shionmusicbot_runtime``.  Local development falls back to a
+project-local ``.env`` and ``.runtime`` directory.
 """
 
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
-try:  # optional at runtime, pinned in requirements.txt
+try:
     from dotenv import load_dotenv
 except ImportError:  # pragma: no cover
     load_dotenv = None
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_DIR = Path(__file__).resolve().parent
+BASE_DIR = str(PROJECT_DIR)  # backwards-compatible import used by clients/tests
+
+
+def _runtime_dir() -> Path:
+    override = os.environ.get("SHION_RUNTIME_DIR", "").strip()
+    if override:
+        return Path(override).expanduser().resolve()
+    private_parent = Path.home() / "private"
+    if private_parent.is_dir():
+        return private_parent / "shionmusicbot_runtime"
+    return PROJECT_DIR / ".runtime"
+
+
+RUNTIME_DIR = _runtime_dir()
+ENV_FILE = Path(os.environ.get("SHION_ENV_FILE", "").strip() or RUNTIME_DIR / "bot.env")
+if not ENV_FILE.is_file():
+    ENV_FILE = PROJECT_DIR / ".env"
 
 if load_dotenv is not None:
-    load_dotenv(os.path.join(BASE_DIR, ".env"), override=False)
+    load_dotenv(ENV_FILE, override=False)
 
 _TRUTHY = {"1", "true", "yes", "on", "y", "t"}
 _FALSY = {"0", "false", "no", "off", "n", "f", ""}
@@ -47,19 +63,16 @@ def _bool(key: str, default: bool = False) -> bool:
     raw = os.environ.get(key)
     if raw is None:
         return default
-    raw = raw.strip().lower()
-    if raw in _TRUTHY:
+    value = raw.strip().lower()
+    if value in _TRUTHY:
         return True
-    if raw in _FALSY:
+    if value in _FALSY:
         return False
     return default
 
 
 @dataclass(frozen=True)
 class Config:
-    """Immutable runtime configuration (exposed as :data:`config`)."""
-
-    # ── Telegram core ────────────────────────────────────────────────
     API_ID: int = 0
     API_HASH: str = ""
     BOT_TOKEN: str = ""
@@ -67,21 +80,16 @@ class Config:
     OWNER_ID: int = 0
     OWNER_USERNAME: str = ""
 
-    # ── Assistant (userbot) account ──────────────────────────────────
     SESSION1: str = ""
     SESSION_STRING: str = ""
     ASSISTANT_ID: int = 0
     ASSISTANT_USERNAME: str = "ShionVCAssistant"
 
-    # ── Community links ──────────────────────────────────────────────
     SUPPORT_CHANNEL: str = "https://t.me/"
     SUPPORT_CHAT: str = "https://t.me/"
+    YT_API_BASE: str = "https://testweb3.cstsc.in/yt/"
 
-    # ── Testweb3 YouTube proxy (single-source streaming policy) ──────
-    YT_API_BASE: str = "http://Testweb3.cstsc.in/yt/"
-
-    # ── Limits & behaviour ───────────────────────────────────────────
-    DURATION_LIMIT: int = 60          # minutes
+    DURATION_LIMIT: int = 60
     QUEUE_LIMIT: int = 20
     PLAYLIST_LIMIT: int = 20
     AUTO_LEAVE: bool = False
@@ -89,19 +97,14 @@ class Config:
     THUMB_GEN: bool = False
     VIDEO_PLAY: bool = True
     LANG_CODE: str = "en"
-
-    # ── Process ──────────────────────────────────────────────────────
     WORKERS: int = 8
 
-    # ── Derived helpers ──────────────────────────────────────────────
     @property
     def duration_limit_secs(self) -> int:
-        """Duration limit converted to seconds."""
         return max(1, self.DURATION_LIMIT) * 60
 
     @property
     def assistant_session(self) -> str:
-        """Preferred session string (SESSION_STRING wins, SESSION1 fallback)."""
         return self.SESSION_STRING or self.SESSION1
 
     @property
@@ -127,7 +130,7 @@ def _build() -> Config:
         ASSISTANT_USERNAME=_str("ASSISTANT_USERNAME", "ShionVCAssistant"),
         SUPPORT_CHANNEL=_str("SUPPORT_CHANNEL", "https://t.me/"),
         SUPPORT_CHAT=_str("SUPPORT_CHAT", "https://t.me/"),
-        YT_API_BASE=_str("YT_API_BASE", "http://Testweb3.cstsc.in/yt/").rstrip("/") + "/",
+        YT_API_BASE=_str("YT_API_BASE", "https://testweb3.cstsc.in/yt/").rstrip("/") + "/",
         DURATION_LIMIT=_int("DURATION_LIMIT", 60),
         QUEUE_LIMIT=_int("QUEUE_LIMIT", 20),
         PLAYLIST_LIMIT=_int("PLAYLIST_LIMIT", 20),
@@ -140,19 +143,18 @@ def _build() -> Config:
     )
 
 
-config: Config = _build()
+config = _build()
 
 
-def validate() -> list:
-    """Return a list of human readable configuration problems (empty == ok)."""
-    problems = []
+def validate(require_assistant: bool = False) -> list[str]:
+    problems: list[str] = []
     if config.API_ID <= 0:
         problems.append("API_ID is missing or invalid")
     if len(config.API_HASH) < 32:
         problems.append("API_HASH is missing or invalid")
     if ":" not in config.BOT_TOKEN:
         problems.append("BOT_TOKEN is missing or invalid")
-    if not config.assistant_session:
+    if require_assistant and not config.assistant_session:
         problems.append("SESSION1 / SESSION_STRING is missing")
     if config.OWNER_ID <= 0:
         problems.append("OWNER_ID is missing or invalid")

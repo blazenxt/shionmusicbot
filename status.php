@@ -8,22 +8,14 @@ require_once __DIR__ . '/runner_lib.php';
 require_once __DIR__ . '/inc/ui.php';
 
 // ── watchdog on page hit: revive the daemon when it died ────────────
-$proc = false;
-if (function_exists('shell_exec')) {
-    $proc = trim((string) shell_exec("pgrep -f -- '-m anony' 2>/dev/null")) !== '';
-}
+$proc = sh_proc_running();
 $st = sh_web_status();
 $fresh = ($st !== null && (time() - (int) ($st['ts'] ?? 0)) < 90);
 $running = $proc || $fresh;
 
-if (!$running && is_file(__DIR__ . '/.bootstrapped') && function_exists('shell_exec')) {
-    @shell_exec(
-        'cd ' . escapeshellarg(__DIR__) . ' && nohup bash ensure-running.sh >> '
-        . escapeshellarg(__DIR__ . '/data/watchdog.log') . ' 2>&1 &'
-    );
-    sleep(3);
-    $proc = trim((string) shell_exec("pgrep -f -- '-m anony' 2>/dev/null")) !== '';
-    $running = $proc;
+if (!$running && is_file(sh_runtime_dir() . '/.bootstrapped')) {
+    $running = sh_start_bot();
+    $proc = $running;
 }
 
 $queues = is_array($st['queues'] ?? null) ? $st['queues'] : array();
@@ -59,6 +51,7 @@ sh_header('status', 'Live Status', 'Daemon health, playback metrics and the bot 
     <h3><?php echo sh_icon('bot', 16); ?> Telegram</h3>
     <div class="kv"><span class="k">Bot</span><span class="mono"><?php echo sh_h((string) ($st['bot'] ?? '@' . sh_env('BOT_USERNAME', 'ShionMusicBot'))); ?></span></div>
     <div class="kv"><span class="k">Assistant</span><span class="mono"><?php echo sh_h((string) ($st['assistant'] ?? '@' . sh_env('ASSISTANT_USERNAME', 'ShionVCAssistant'))); ?></span></div>
+    <div class="kv"><span class="k">Voice engine</span><?php echo sh_badge($fresh && !empty($st['assistant_ready']), $fresh && !empty($st['assistant_ready']) ? 'ready' : 'login required'); ?></div>
     <div class="kv"><span class="k">Chats / Users</span><span><?php echo $fresh ? (int) ($st['chats'] ?? 0) . ' / ' . (int) ($st['users'] ?? 0) : '—'; ?></span></div>
   </div>
   <div class="card">
@@ -89,7 +82,7 @@ sh_header('status', 'Live Status', 'Daemon health, playback metrics and the bot 
 <section class="card">
   <h3><?php echo sh_icon('terminal', 16); ?> bot.log console <span class="muted" style="font-weight:400">— last 80 lines, refresh 15 s</span></h3>
   <div class="console"><?php
-    $lines = sh_tail(__DIR__ . '/bot.log', 80);
+    $lines = sh_tail(sh_runtime_dir() . '/bot.log', 80);
     if (!$lines) {
         echo 'no log output yet…';
     } else {
