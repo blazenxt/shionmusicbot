@@ -23,8 +23,18 @@ fi
 
 say "upgrading packaging tools"
 "$VENV/bin/python3" -m pip install --upgrade pip wheel setuptools >>"$LOG" 2>&1
+
+# Keep the install manifest private so production can remove the public copy.
+if [ -f "$PROJECT/requirements.txt" ]; then
+  cp "$PROJECT/requirements.txt" "$RUNTIME/requirements.txt"
+  chmod 600 "$RUNTIME/requirements.txt" 2>/dev/null || true
+fi
+if [ ! -f "$RUNTIME/requirements.txt" ]; then
+  say "ERROR: requirements manifest is missing"
+  exit 1
+fi
 say "installing production requirements"
-"$VENV/bin/python3" -m pip install --upgrade -r "$PROJECT/requirements.txt" >>"$LOG" 2>&1
+"$VENV/bin/python3" -m pip install --upgrade -r "$RUNTIME/requirements.txt" >>"$LOG" 2>&1
 
 say "linking bundled ffmpeg"
 FFMPEG="$($VENV/bin/python3 - <<'PY'
