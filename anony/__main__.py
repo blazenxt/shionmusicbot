@@ -159,6 +159,42 @@ async def _start_assistant() -> bool:
         return False
 
 
+async def _start_bot_with_backoff(assistant_ready: bool) -> None:
+    """Start the bot once, sleeping in-process when Telegram requests it.
+
+    Keeping the process alive prevents the one-minute watchdog from turning a
+    single FLOOD_WAIT into repeated authorization attempts.
+    """
+    from pyrogram.errors import FloodWait
+
+    while True:
+        try:
+            await bot.start()
+            (dirutil.RUNTIME / "bot_start_error.json").unlink(missing_ok=True)
+            return
+        except FloodWait as exc:
+            wait = max(1, int(getattr(exc, "value", 60))) + 3
+            retry_at = int(time.time()) + wait
+            payload = {
+                "status": "rate_limited",
+                "ts": int(time.time()),
+                "pid": os.getpid(),
+                "bot": f"@{config.BOT_USERNAME}",
+                "assistant": f"@{config.ASSISTANT_USERNAME}",
+                "assistant_ready": assistant_ready,
+                "retry_after": wait,
+                "retry_at": retry_at,
+            }
+            _write_private_json("bot_start_error.json", payload)
+            _write_private_json("web_status.json", payload)
+            log.warning("Telegram requested a %ss bot-start backoff; retrying in-process", wait)
+            try:
+                await bot.disconnect()
+            except Exception:
+                pass
+            await asyncio.sleep(wait)
+
+
 async def main() -> None:
     dirutil.ensure_dirs()
     setup_logging()
@@ -173,7 +209,7 @@ async def main() -> None:
     db.load()
 
     assistant_ready = await _start_assistant()
-    await bot.start()
+    await _start_bot_with_backoff(assistant_ready)
 
     from anony import plugins as plugins_package
 

@@ -6,7 +6,7 @@ import logging
 
 from pyrogram import Client, enums
 
-from config import BASE_DIR, config
+from config import RUNTIME_DIR, config
 
 log = logging.getLogger(__name__)
 
@@ -30,12 +30,14 @@ class Bot(Client):
             api_id=config.API_ID,
             api_hash=config.API_HASH,
             bot_token=config.BOT_TOKEN,
-            in_memory=True,
+            # Persist bot authorization privately so watchdog restarts do not
+            # repeatedly call auth.ImportBotAuthorization and trigger floods.
+            in_memory=False,
             plugins=dict(root="anony.plugins"),
             workers=config.WORKERS,
             parse_mode=enums.ParseMode.MARKDOWN,
             sleep_threshold=20,
-            workdir=str(BASE_DIR),
+            workdir=str(RUNTIME_DIR / "sessions"),
         )
 
     async def start(self) -> None:

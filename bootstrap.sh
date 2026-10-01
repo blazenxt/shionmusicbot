@@ -55,7 +55,15 @@ fi
 # venv command line from terminating the production process.
 cat >"$RUNTIME/bin/python-safe" <<EOF
 #!/usr/bin/env bash
-exec -a "$RUNTIME/bin/python-safe" "$VENV/bin/python3" "\$@"
+VENV="$VENV"
+for site in "\$VENV"/lib/python*/site-packages; do
+  if [ -d "\$site" ]; then
+    export PYTHONPATH="\$site\${PYTHONPATH:+:\$PYTHONPATH}"
+    break
+  fi
+done
+export VIRTUAL_ENV="\$VENV"
+exec -a "$RUNTIME/bin/python-safe" "\$VENV/bin/python3" "\$@"
 EOF
 chmod 700 "$RUNTIME/bin/python-safe"
 
