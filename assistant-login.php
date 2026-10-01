@@ -98,14 +98,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $message = 'Security check failed. Refresh the page and try again.';
     } else {
         $action = (string) ($_POST['action'] ?? '');
-        if ($action === 'unlock') {
+        if ($action === 'begin') {
             $given = (string) ($_POST['manager_key'] ?? '');
             if ($manager_key !== '' && hash_equals($manager_key, $given)) {
                 session_regenerate_id(true);
                 $_SESSION['assistant_manager_ok'] = true;
                 $_SESSION['assistant_manager_at'] = time();
-                $message = 'Secure login unlocked for 20 minutes.';
-                $message_ok = true;
+                set_time_limit(120);
+                $result = sh_login_helper(array(
+                    'action' => 'send',
+                    'phone' => (string) ($_POST['phone'] ?? ''),
+                ));
+                $message_ok = !empty($result['ok']);
+                $result_step = (string) ($result['step'] ?? '');
+                $message = $message_ok
+                    ? ($result_step === 'saved'
+                        ? 'Session saved.'
+                        : 'Telegram sent a login code. Enter the newest code below.')
+                    : (string) ($result['error'] ?? 'Telegram login failed.');
+                if ($message_ok) {
+                    $_SESSION['assistant_auth_step'] = $result_step !== '' ? $result_step : 'phone';
+                    if ($result_step === 'saved') {
+                        sh_close_login_page($closed_file);
+                        sh_restart_bot();
+                        unset($_SESSION['assistant_manager_ok'], $_SESSION['assistant_auth_step']);
+                        header('Location: ' . basename(__FILE__), true, 303);
+                        exit;
+                    }
+                }
             } else {
                 usleep(600000);
                 $message = 'Invalid manager key.';
@@ -197,14 +217,24 @@ sh_header('assistant', 'One-time Assistant Login', 'This secure page permanently
     <?php } ?>
   </div>
 
+  <ol class="steps mb">
+    <li>Enter the private manager key and assistant phone number.</li>
+    <li>Enter the newest code received inside Telegram.</li>
+    <li>Enter 2FA only when Telegram requests it.</li>
+  </ol>
+
   <?php if (!$unlocked) { ?>
   <form method="post" autocomplete="off" class="auth-form">
     <input type="hidden" name="csrf" value="<?php echo sh_h((string) $_SESSION['assistant_login_csrf']); ?>">
-    <input type="hidden" name="action" value="unlock">
+    <input type="hidden" name="action" value="begin">
     <label for="manager_key">Manager key</label>
-    <div class="form-row">
+    <div class="form-row mb">
       <input id="manager_key" name="manager_key" type="password" required autocomplete="current-password" placeholder="Private dashboard key">
-      <button class="btn btn-primary" type="submit">Unlock</button>
+    </div>
+    <label for="phone">Assistant phone number</label>
+    <div class="form-row">
+      <input id="phone" name="phone" type="tel" inputmode="tel" required autocomplete="tel" placeholder="+919876543210">
+      <button class="btn btn-primary" type="submit">Send Telegram code</button>
     </div>
   </form>
   <?php } elseif ($step === 'code') { ?>
