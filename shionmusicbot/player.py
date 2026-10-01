@@ -115,24 +115,32 @@ class Player:
         username = getattr(chat, "username", None)
         join_errors: list[str] = []
         if username:
+            target = f"@{username}"
+            self._chat_refs[chat_id] = target
+            # Public groups can be resolved and played by username. Do not require
+            # numeric -100 peer resolution here; PyrogramMod can fail to parse a
+            # successful public join as ChatInviteJoinResultOk on some Telegram layers.
             try:
-                await app.join_chat(f"@{username}")
-                await self._refresh_assistant_peer(app, chat_id)
+                await app.get_chat(target)
+            except Exception as exc:
+                logger.debug("Assistant public get_chat failed for %s: %s", target, exc)
+            try:
+                await app.join_chat(target)
+                await app.get_chat(target)
                 return
             except Exception as exc:
                 raw = str(exc).lower()
                 if "already" in raw or "participant" in raw or "user_already" in raw:
-                    await self._refresh_assistant_peer(app, chat_id)
                     return
-                # Some PyrogramMod builds successfully join a public chat but then
-                # raise while parsing Telegram's join result. Re-check membership
-                # before falling back to invite-link export.
+                # Important: if Telegram joined the public group but PyrogramMod
+                # raised while parsing the response, get_chat(@username) still works.
+                # In that case continue with @username instead of trying an invite
+                # link that requires bot admin rights.
                 try:
-                    await self._refresh_assistant_peer(app, chat_id)
-                    await app.get_chat_member(chat_id, (await app.get_me()).id)
+                    await app.get_chat(target)
                     logger.info(
-                        "Assistant public join for %s succeeded after parse warning: %s",
-                        chat_id,
+                        "Assistant public join for %s accepted after parse warning: %s",
+                        target,
                         exc,
                     )
                     return
@@ -145,12 +153,12 @@ class Player:
             invite = await self.bot.export_chat_invite_link(chat_id)
         except Exception as exc:
             hint = (
-                "Assistant is not in this group and I could not create an invite link. "
+                "Assistant is not in this private group and I could not create an invite link. "
                 "Promote the bot as admin with Invite Users/Add Members permission, "
-                "then use /play again. For private groups this permission is required."
+                "then use /play again."
             )
             if join_errors:
-                hint += f" Public join fallback failed: {', '.join(join_errors)}."
+                hint += f" Public username join failed: {', '.join(join_errors)}."
             raise RuntimeError(hint) from exc
 
         try:
@@ -188,6 +196,7 @@ class Player:
         if isinstance(target, str):
             try:
                 await app.get_chat(target)
+                return target
             except Exception as exc:
                 logger.debug("Assistant could not pre-resolve %s: %s", target, exc)
 
@@ -195,10 +204,10 @@ class Player:
             await self._refresh_assistant_peer(app, chat_id)
         except Exception as exc:
             raise RuntimeError(
-                "Assistant cannot access this group/channel. I can auto-invite the assistant "
-                "when the bot has Invite Users permission. Promote the bot, keep a voice "
-                "chat open, then try /play again. The assistant also needs Manage Voice "
-                "Chats / Video Chats when admin rights are required."
+                "Assistant cannot access this group/channel. Public groups are joined by "
+                "@username automatically. For private groups, promote the bot with Invite "
+                "Users/Add Members permission so it can auto-invite the assistant, then "
+                "try /play again."
             ) from exc
         return target
 

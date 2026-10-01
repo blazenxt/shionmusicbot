@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from functools import wraps
 from typing import Any, Awaitable, Callable
 
@@ -9,6 +10,13 @@ from .clients import CONFIG, db
 from .strings import NEED_ADMIN, NEED_GROUP
 
 Handler = Callable[..., Awaitable[Any]]
+
+
+def touch_chat_later(message) -> None:
+    try:
+        asyncio.create_task(db.touch_chat(message.chat.id, getattr(message.chat, "title", None)))
+    except Exception:
+        pass
 
 
 def is_group_message(message) -> bool:
@@ -44,7 +52,7 @@ def group_only(func: Handler) -> Handler:
     async def wrapper(client, message, *args, **kwargs):
         if not is_group_message(message):
             return await message.reply_text(NEED_GROUP)
-        await db.touch_chat(message.chat.id, getattr(message.chat, "title", None))
+        touch_chat_later(message)
         return await func(client, message, *args, **kwargs)
 
     return wrapper
@@ -55,7 +63,7 @@ def admin_or_auth(func: Handler) -> Handler:
     async def wrapper(client, message, *args, **kwargs):
         if not is_group_message(message):
             return await message.reply_text(NEED_GROUP)
-        await db.touch_chat(message.chat.id, getattr(message.chat, "title", None))
+        touch_chat_later(message)
         user = getattr(message, "from_user", None)
         user_id = getattr(user, "id", None)
         if await is_authorized_user(client, message.chat.id, user_id):

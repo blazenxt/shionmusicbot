@@ -4,6 +4,7 @@ import asyncio
 import logging
 
 from pyrogram import filters
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButtonStyle
 
 from ..clients import CONFIG, assistant, bot, db, downloader, player
 from ..decorators import admin_or_auth, group_only, is_authorized_user
@@ -19,6 +20,53 @@ from ..strings import (
 from ..utils import format_duration, html_user, is_url, parse_duration, split_text
 
 logger = logging.getLogger(__name__)
+
+BUTTON_PRIMARY = KeyboardButtonStyle(bg_primary=True)
+BUTTON_SUCCESS = KeyboardButtonStyle(bg_success=True)
+BOT_USERNAME: str | None = None
+
+
+async def _bot_username() -> str | None:
+    global BOT_USERNAME
+    if BOT_USERNAME:
+        return BOT_USERNAME
+    me = getattr(bot, "me", None)
+    username = getattr(me, "username", None)
+    if not username:
+        try:
+            me = await bot.get_me()
+            username = getattr(me, "username", None)
+        except Exception:
+            username = None
+    BOT_USERNAME = username
+    return BOT_USERNAME
+
+
+async def _group_only_markup() -> InlineKeyboardMarkup | None:
+    username = await _bot_username()
+    if not username:
+        return None
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "➕ ᴀᴅᴅ ᴍᴇ ᴛᴏ ɢʀᴏᴜᴘ",
+                    url=(
+                        f"https://t.me/{username}?startgroup=music"
+                        "&admin=invite_users+delete_messages+manage_video_chats"
+                    ),
+                    style=BUTTON_SUCCESS,
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "📖 ʜᴇʟᴘ & ᴄᴏᴍᴍᴀɴᴅs",
+                    callback_data="shion:help",
+                    style=BUTTON_PRIMARY,
+                )
+            ],
+        ]
+    )
 
 
 def _cmd(names: str | list[str]):
@@ -160,6 +208,61 @@ async def _run_play_request(message, status, query: str, *, force: bool, video: 
             f"<b>Position:</b> <code>{result.position}</code>",
             disable_web_page_preview=True,
         )
+
+
+PRIVATE_GROUP_ONLY_TEXT = (
+    "<b>🎧 Shion Music bot works in groups only</b>\n\n"
+    "<code>/play</code>, <code>/vplay</code>, <code>/radio</code>, playlist and "
+    "VC control commands need a Telegram group voice chat.\n\n"
+    "<b>How to use:</b>\n"
+    "1. Add me to your group.\n"
+    "2. Give optional minimum admin permissions: <b>Invite Users/Add Members</b>, "
+    "<b>Delete Messages</b>, and <b>Manage Voice Chats / Video Chats</b>.\n"
+    "3. Start/open the group voice chat.\n"
+    "4. Send <code>/play song name</code> or <code>/vplay song name</code> in the group.\n\n"
+    "The assistant joins automatically when playback starts."
+)
+
+
+@bot.on_message(
+    _cmd(
+        [
+            "play",
+            "p",
+            "playforce",
+            "fplay",
+            "vplay",
+            "vstream",
+            "radio",
+            "stream",
+            "playlist",
+            "pl",
+            "pause",
+            "resume",
+            "mute",
+            "unmute",
+            "skip",
+            "stop",
+            "join",
+            "leave",
+            "queue",
+            "now",
+            "mode",
+            "seek",
+            "volume",
+            "loop",
+            "shuffle",
+        ]
+    )
+    & filters.private
+)
+async def private_music_command_handler(_, message):
+    await _reply_or_send(
+        message,
+        PRIVATE_GROUP_ONLY_TEXT,
+        reply_markup=await _group_only_markup(),
+        disable_web_page_preview=True,
+    )
 
 
 @bot.on_message(_cmd(["play", "p", "playforce", "fplay", "vplay", "vstream"]) & filters.group)
