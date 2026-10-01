@@ -76,12 +76,17 @@ if ($action === 'search' || $action === 'resolve') {
     if (!empty($info['recovery_stream']['url'])) {
         $stream = yt_base() . ltrim((string) $info['recovery_stream']['url'], '/');
     }
+    $durationText = (string) ($info['duration_text'] ?? '');
+    if ($durationText === '' && (int) ($info['duration'] ?? 0) > 0) {
+        $seconds = (int) $info['duration'];
+        $durationText = $seconds >= 3600 ? gmdate('G:i:s', $seconds) : gmdate('i:s', $seconds);
+    }
     echo json_encode(array(
         'ok' => true,
         'id' => (string) ($info['id'] ?? $id),
         'title' => (string) ($info['title'] ?? ''),
         'channel' => (string) ($info['channel'] ?? ''),
-        'duration_text' => (string) ($info['duration_text'] ?? ''),
+        'duration_text' => $durationText,
         'thumbnail' => (string) ($info['thumbnail'] ?? ''),
         'stream' => $stream !== ''
             ? 'webstream.php?action=proxy&u=' . rtrim(strtr(base64_encode($stream), '+/', '-_'), '=')
@@ -93,7 +98,8 @@ if ($action === 'search' || $action === 'resolve') {
 if ($action === 'proxy') {
     $raw = isset($_GET['u']) ? (string) $_GET['u'] : '';
     $url = base64_decode(strtr($raw, '-_', '+/'));
-    if ($url === false || strpos($url, 'http://') !== 0) {
+    $scheme = strtolower((string) (parse_url((string) $url, PHP_URL_SCHEME) ?: ''));
+    if ($url === false || !in_array($scheme, array('http', 'https'), true)) {
         http_response_code(400);
         exit("Bad request\n");
     }
@@ -117,8 +123,13 @@ if ($action === 'proxy') {
     $statusSent = false;
     curl_setopt($ch, CURLOPT_HEADERFUNCTION, function ($ch, $line) use (&$statusSent) {
         $trim = trim($line);
-        foreach (array('content-type', 'content-length', 'content-range', 'accept-ranges', 'location') as $forward) {
-            if (stripos($trim, $forward) === 0) {
+        if (preg_match('/^HTTP\/\S+\s+(\d{3})/', $trim, $match)) {
+            http_response_code((int) $match[1]);
+            $statusSent = true;
+            return strlen($line);
+        }
+        foreach (array('content-type', 'content-length', 'content-range', 'accept-ranges') as $forward) {
+            if (stripos($trim, $forward . ':') === 0) {
                 header($trim);
                 break;
             }
@@ -222,6 +233,9 @@ sh_header('webstream', 'Web Player', 'Search and listen right here — streams r
       .catch(function () { results.innerHTML = '<p class="muted">Resolve failed.</p>'; });
   }
 
+  audio.addEventListener('error', function () {
+    results.innerHTML = '<p class="muted">Playback failed. Please select the track again to refresh its stream token.</p>';
+  });
   go.addEventListener('click', search);
   q.addEventListener('keydown', function (e) { if (e.key === 'Enter') { search(); } });
 })();
