@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 
 from pyrogram import filters
-from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButtonStyle
 
 from .. import __version__
 from ..clients import CONFIG, bot, player
@@ -11,6 +11,7 @@ from ..strings import ABOUT_TEXT, HELP_TEXT, START_TEXT
 from ..utils import format_duration
 
 START_TIME = time.monotonic()
+BUTTON_PRIMARY = KeyboardButtonStyle(bg_primary=True)
 
 
 def _cmd(names: str | list[str]):
@@ -20,7 +21,13 @@ def _cmd(names: str | list[str]):
 @bot.on_message(_cmd(["start", "alive"]))
 async def start_handler(_, message):
     markup = InlineKeyboardMarkup(
-        [[InlineKeyboardButton("📖 ʜᴇʟᴘ & ᴄᴏᴍᴍᴀɴᴅs", callback_data="shion:help", style="primary")]]
+        [
+            [
+                InlineKeyboardButton(
+                    "📖 ʜᴇʟᴘ & ᴄᴏᴍᴍᴀɴᴅs", callback_data="shion:help", style=BUTTON_PRIMARY
+                )
+            ]
+        ]
     )
     await message.reply_text(START_TEXT, reply_markup=markup, disable_web_page_preview=True)
 

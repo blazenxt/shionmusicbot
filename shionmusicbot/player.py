@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Deque
 
 from ntgcalls import MediaSource
-from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButtonStyle
 from pytgcalls import filters as call_filters
 from pytgcalls.types import GroupCallConfig, StreamEnded
 from pytgcalls.types.raw import AudioParameters, AudioStream, Stream, VideoParameters, VideoStream
@@ -20,6 +20,10 @@ from .models import Track
 from .utils import format_duration, html_user, split_text
 
 logger = logging.getLogger(__name__)
+
+BUTTON_PRIMARY = KeyboardButtonStyle(bg_primary=True)
+BUTTON_SUCCESS = KeyboardButtonStyle(bg_success=True)
+BUTTON_DANGER = KeyboardButtonStyle(bg_danger=True)
 
 
 class LoopMode:
@@ -302,20 +306,32 @@ class Player:
         return InlineKeyboardMarkup(
             [
                 [
-                    InlineKeyboardButton("⏸ ᴘᴀᴜsᴇ", callback_data="shion:pause", style="primary"),
-                    InlineKeyboardButton("▶ ʀᴇsᴜᴍᴇ", callback_data="shion:resume", style="success"),
-                ],
-                [
-                    InlineKeyboardButton("🔇 ᴍᴜᴛᴇ", callback_data="shion:mute", style="danger"),
                     InlineKeyboardButton(
-                        "🔊 ᴜɴᴍᴜᴛᴇ", callback_data="shion:unmute", style="success"
+                        "⏸ ᴘᴀᴜsᴇ", callback_data="shion:pause", style=BUTTON_PRIMARY
+                    ),
+                    InlineKeyboardButton(
+                        "▶ ʀᴇsᴜᴍᴇ", callback_data="shion:resume", style=BUTTON_SUCCESS
                     ),
                 ],
                 [
-                    InlineKeyboardButton("⏭ sᴋɪᴘ", callback_data="shion:skip", style="primary"),
-                    InlineKeyboardButton("⏹ sᴛᴏᴘ", callback_data="shion:stop", style="danger"),
+                    InlineKeyboardButton(
+                        "🔇 ᴍᴜᴛᴇ", callback_data="shion:mute", style=BUTTON_DANGER
+                    ),
+                    InlineKeyboardButton(
+                        "🔊 ᴜɴᴍᴜᴛᴇ", callback_data="shion:unmute", style=BUTTON_SUCCESS
+                    ),
                 ],
-                [InlineKeyboardButton("📜 ǫᴜᴇᴜᴇ", callback_data="shion:queue", style="primary")],
+                [
+                    InlineKeyboardButton(
+                        "⏭ sᴋɪᴘ", callback_data="shion:skip", style=BUTTON_PRIMARY
+                    ),
+                    InlineKeyboardButton("⏹ sᴛᴏᴘ", callback_data="shion:stop", style=BUTTON_DANGER),
+                ],
+                [
+                    InlineKeyboardButton(
+                        "📜 ǫᴜᴇᴜᴇ", callback_data="shion:queue", style=BUTTON_PRIMARY
+                    )
+                ],
             ]
         )
 
