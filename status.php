@@ -11,7 +11,11 @@ require_once __DIR__ . '/inc/ui.php';
 $proc = sh_proc_running();
 $st = sh_web_status();
 $fresh = ($st !== null && (time() - (int) ($st['ts'] ?? 0)) < 90);
+$state = $fresh ? (string) ($st['status'] ?? 'unknown') : 'stale';
 $running = $proc || $fresh;
+$telegram_online = $running && $state === 'online';
+$daemon_label = $telegram_online ? 'Daemon online'
+    : ($state === 'rate_limited' ? 'Waiting for Telegram backoff' : 'Daemon offline');
 
 if (!$running && is_file(sh_runtime_dir() . '/.bootstrapped')) {
     $running = sh_start_bot();
@@ -30,7 +34,7 @@ sh_header('status', 'Live Status', 'Daemon health, playback metrics and the bot 
 <meta http-equiv="refresh" content="15">
 
 <section class="row spread mb">
-  <?php echo sh_badge($running, $running ? 'Daemon online' : 'Daemon offline'); ?>
+  <?php echo sh_badge($telegram_online, $daemon_label); ?>
   <?php if ($fresh) {
       echo sh_badge(true, 'Metrics fresh (' . sh_h(date('H:i:s', (int) $st['ts'])) . ')');
   } else {
