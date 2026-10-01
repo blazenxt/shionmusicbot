@@ -6,6 +6,7 @@ import anony
 from anony.helpers import Media, Track
 from anony.helpers._player import _cancel_idle, advance, on_stream_end
 from anony.helpers._queue import queue
+from anony.core.calls import TgCall
 
 
 class FakeDB:
@@ -37,6 +38,18 @@ class FakeCall:
 class FakeBot:
     async def send_message(self, *args, **kwargs):
         return None
+
+
+@pytest.mark.asyncio
+async def test_active_chats_uses_pytgcalls_async_property():
+    class FakePyTgCalls:
+        @property
+        async def calls(self):
+            return {-1001: object(), -1002: object()}
+
+    manager = TgCall.__new__(TgCall)
+    manager.app = FakePyTgCalls()
+    assert await manager.active_chats() == [-1001, -1002]
 
     async def send_photo(self, *args, **kwargs):
         return None

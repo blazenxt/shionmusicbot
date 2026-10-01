@@ -120,7 +120,10 @@ class TgCall:
 
     async def active_chats(self) -> List[int]:
         try:
-            return list((await self.app.calls()).keys())
+            # PyTgCalls v3 exposes ``calls`` as an async property, not a
+            # callable. Calling it leaks the property coroutine and always
+            # reports an empty active-call list.
+            return list((await self.app.calls).keys())
         except Exception:  # noqa: BLE001
             return []
 
