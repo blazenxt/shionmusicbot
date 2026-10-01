@@ -21,7 +21,8 @@ from .utils import format_duration, html_user, split_text
 
 logger = logging.getLogger(__name__)
 
-IDLE_LEAVE_SECONDS = 60 * 60
+IDLE_VOICE_LEAVE_SECONDS = 5 * 60
+IDLE_GROUP_LEAVE_SECONDS = 60 * 60
 BUTTON_PRIMARY = KeyboardButtonStyle(bg_primary=True)
 BUTTON_SUCCESS = KeyboardButtonStyle(bg_success=True)
 BUTTON_DANGER = KeyboardButtonStyle(bg_danger=True)
@@ -45,7 +46,8 @@ class QueueState:
     muted: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     suppress_end_until: float = 0.0
-    idle_leave_task: asyncio.Task | None = None
+    idle_voice_task: asyncio.Task | None = None
+    idle_group_task: asyncio.Task | None = None
 
 
 @dataclass(slots=True)
@@ -87,71 +89,164 @@ class Player:
     def _chat_target(self, chat_id: int) -> int | str:
         return self._chat_refs.get(chat_id, chat_id)
 
+    async def ensure_assistant_joined(self, chat) -> None:
+        """Make the assistant user join the target group when playback is requested.
+
+        The bot account handles commands, while the assistant account joins the
+        group/voice-chat only when needed. Public groups are joined by username;
+        private groups are joined through an invite link exported by the bot.
+        """
+        self.remember_chat(chat)
+        chat_id = int(getattr(chat, "id"))
+        app = getattr(self.calls, "mtproto_client", None)
+        if app is None:
+            return
+
+        try:
+            me = await app.get_me()
+            member = await app.get_chat_member(chat_id, me.id)
+            status = str(getattr(member, "status", "")).lower()
+            if "left" not in status and "banned" not in status and "kicked" not in status:
+                await self._refresh_assistant_peer(app, chat_id)
+                return
+        except Exception as exc:
+            logger.debug("Assistant membership check failed for %s: %s", chat_id, exc)
+
+        username = getattr(chat, "username", None)
+        join_errors: list[str] = []
+        if username:
+            try:
+                await app.join_chat(f"@{username}")
+                await self._refresh_assistant_peer(app, chat_id)
+                return
+            except Exception as exc:
+                raw = str(exc).lower()
+                if "already" in raw or "participant" in raw or "user_already" in raw:
+                    await self._refresh_assistant_peer(app, chat_id)
+                    return
+                join_errors.append(str(exc))
+                logger.debug("Assistant public join failed for %s: %s", chat_id, exc)
+
+        try:
+            invite = await self.bot.export_chat_invite_link(chat_id)
+        except Exception as exc:
+            details = f" Public join failed: {'; '.join(join_errors)}" if join_errors else ""
+            raise RuntimeError(
+                "Assistant is not in this group and I could not create an invite link. "
+                "Promote the bot with Invite Users/Add Members permission, then use "
+                "/play again. For private groups this permission is required." + details
+            ) from exc
+
+        try:
+            await app.join_chat(invite)
+        except Exception as exc:
+            raw = str(exc).lower()
+            if "already" not in raw and "participant" not in raw and "user_already" not in raw:
+                raise RuntimeError(
+                    "Assistant auto-invite failed. Revoke bad invite links if needed, "
+                    "then promote the bot with Invite Users permission and retry /play."
+                ) from exc
+        await self._refresh_assistant_peer(app, chat_id)
+
+    async def _refresh_assistant_peer(self, app, chat_id: int) -> None:
+        try:
+            await app.resolve_peer(chat_id)
+            return
+        except Exception:
+            pass
+        try:
+            async for dialog in app.get_dialogs():
+                dialog_chat = getattr(dialog, "chat", None)
+                if getattr(dialog_chat, "id", None) == chat_id:
+                    break
+        except Exception as exc:
+            logger.debug("Assistant dialog refresh failed for %s: %s", chat_id, exc)
+        await app.resolve_peer(chat_id)
+
     async def _warm_assistant_peer(self, chat_id: int) -> int | str:
         target = self._chat_target(chat_id)
         app = getattr(self.calls, "mtproto_client", None)
         if app is None:
             return target
 
-        # 1) If the chat is public, resolving by @username fills the assistant's
-        # peer cache and avoids CHANNEL_INVALID on the numeric -100 id.
         if isinstance(target, str):
             try:
                 await app.get_chat(target)
             except Exception as exc:
                 logger.debug("Assistant could not pre-resolve %s: %s", target, exc)
 
-        # 2) Validate numeric id from the assistant session. If the assistant was
-        # newly added, loading dialogs often refreshes Pyrogram's peer cache.
         try:
-            await app.resolve_peer(chat_id)
-        except Exception as first_exc:
-            logger.debug("Assistant peer cache miss for %s: %s", chat_id, first_exc)
-            try:
-                async for dialog in app.get_dialogs():
-                    dialog_chat = getattr(dialog, "chat", None)
-                    if getattr(dialog_chat, "id", None) == chat_id:
-                        break
-            except Exception as exc:
-                logger.debug("Assistant dialog refresh failed for %s: %s", chat_id, exc)
-            try:
-                await app.resolve_peer(chat_id)
-            except Exception as exc:
-                raise RuntimeError(
-                    "Assistant cannot access this group/channel. Add the assistant account "
-                    "to this group, keep it as a member, promote it with Manage Video Chats, "
-                    "start the voice chat, then try /play again. For private groups, the "
-                    "assistant must be manually added; public groups can also be resolved "
-                    "by @username."
-                ) from exc
+            await self._refresh_assistant_peer(app, chat_id)
+        except Exception as exc:
+            raise RuntimeError(
+                "Assistant cannot access this group/channel. I can auto-invite the assistant "
+                "when the bot has Invite Users permission. Promote the bot, keep a voice "
+                "chat open, then try /play again. The assistant also needs Manage Voice "
+                "Chats / Video Chats when admin rights are required."
+            ) from exc
         return target
 
     @staticmethod
     def _cancel_idle_leave(state: QueueState) -> None:
-        if state.idle_leave_task and not state.idle_leave_task.done():
-            state.idle_leave_task.cancel()
-        state.idle_leave_task = None
+        if state.idle_voice_task and not state.idle_voice_task.done():
+            state.idle_voice_task.cancel()
+        if state.idle_group_task and not state.idle_group_task.done():
+            state.idle_group_task.cancel()
+        state.idle_voice_task = None
+        state.idle_group_task = None
 
     def _schedule_idle_leave(self, chat_id: int) -> None:
         state = self.state(chat_id)
         self._cancel_idle_leave(state)
-        state.idle_leave_task = asyncio.create_task(self._idle_leave_after(chat_id))
+        state.idle_voice_task = asyncio.create_task(self._idle_voice_leave_after(chat_id))
+        state.idle_group_task = asyncio.create_task(self._idle_group_leave_after(chat_id))
 
-    async def _idle_leave_after(self, chat_id: int) -> None:
+    async def _idle_voice_leave_after(self, chat_id: int) -> None:
         try:
-            await asyncio.sleep(IDLE_LEAVE_SECONDS)
+            await asyncio.sleep(IDLE_VOICE_LEAVE_SECONDS)
             state = self.state(chat_id)
             async with state.lock:
                 if state.current or state.queue:
                     return
-                state.idle_leave_task = None
+                state.idle_voice_task = None
             try:
                 await self.calls.leave_call(self._chat_target(chat_id))
             except Exception:
                 pass
             await self.bot.send_message(
                 chat_id,
-                "👋 No new tracks were queued for 1 hour. Assistant left the voice chat.",
+                "👋 No new /play or /vplay for 5 minutes. Assistant left the voice chat.",
+            )
+        except asyncio.CancelledError:
+            return
+
+    async def _idle_group_leave_after(self, chat_id: int) -> None:
+        try:
+            await asyncio.sleep(IDLE_GROUP_LEAVE_SECONDS)
+            state = self.state(chat_id)
+            async with state.lock:
+                if state.current or state.queue:
+                    return
+                state.idle_group_task = None
+            try:
+                await self.calls.leave_call(self._chat_target(chat_id))
+            except Exception:
+                pass
+            app = getattr(self.calls, "mtproto_client", None)
+            if app is not None:
+                try:
+                    await app.leave_chat(chat_id, delete=True)
+                except TypeError:
+                    try:
+                        await app.leave_chat(chat_id)
+                    except Exception:
+                        pass
+                except Exception as exc:
+                    logger.debug("Assistant group idle leave failed in %s: %s", chat_id, exc)
+            await self.bot.send_message(
+                chat_id,
+                "👋 Assistant left this group after 1 hour of inactivity. "
+                "Use /play again and I will auto-invite it when needed.",
             )
         except asyncio.CancelledError:
             return
@@ -423,8 +518,9 @@ class Player:
             self._schedule_idle_leave(chat_id)
             await self.bot.send_message(
                 chat_id,
-                "✅ Queue finished. I will leave the voice chat if no one plays "
-                "anything for 1 hour.",
+                "✅ Queue finished. I will leave the voice chat after 5 minutes "
+                "of inactivity. Assistant will leave this group after 1 hour "
+                "if nobody uses /play or /vplay.",
             )
 
     async def pause(self, chat_id: int) -> None:
@@ -483,10 +579,8 @@ class Player:
             await self._play_track(chat_id, next_track)
             return next_track
 
-        try:
-            await self.calls.leave_call(self._chat_target(chat_id))
-        except Exception:
-            pass
+        if self.config.auto_leave_when_queue_empty:
+            self._schedule_idle_leave(chat_id)
         return None
 
     async def stop(self, chat_id: int) -> None:

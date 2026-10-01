@@ -8,7 +8,7 @@ from pyrogram import filters
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButtonStyle
 
 from .. import __version__
-from ..clients import CONFIG, bot, player
+from ..clients import CONFIG, bot, db, player
 from ..strings import ABOUT_TEXT, HELP_TEXT, START_TEXT
 from ..utils import format_duration
 
@@ -29,6 +29,16 @@ async def _delete_later(message, delay: int = 4) -> None:
 
 
 _prefix_pattern = "".join(re.escape(prefix) for prefix in CONFIG.command_prefixes)
+
+
+@bot.on_message(filters.group, group=-2)
+async def group_seen_warmup_handler(_, message):
+    """Warm chat state even when /start was never used in the group."""
+    try:
+        player.remember_chat(message.chat)
+        await db.touch_chat(message.chat.id, getattr(message.chat, "title", None))
+    except Exception:
+        pass
 
 
 @bot.on_message(filters.group & filters.regex(rf"^[{_prefix_pattern}][A-Za-z0-9_@]+"), group=-1)

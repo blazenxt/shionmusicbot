@@ -7,7 +7,7 @@ Original author / commit identity: **@blazenxt <m11.galaxy.m581@gmail.com>**
 
 ## Features
 
-- Telegram group voice chat streaming with an assistant user account
+- Telegram group voice chat streaming with an auto-invited assistant user account
 - YouTube search and URL playback through `yt-dlp`
 - Direct audio/radio stream URL playback
 - Telegram replied audio/video/document playback
@@ -15,6 +15,7 @@ Original author / commit identity: **@blazenxt <m11.galaxy.m581@gmail.com>**
 - Audio/video stream mode switching with `/mode` and one-shot `/vplay`
 - Mute, unmute, pause, resume, skip, stop, join, leave
 - Multi-chat queues plus `/active` stream overview
+- Queue idle cleanup: VC leave after 5 minutes, assistant group leave after 1 hour
 - Admin/DJ authorization system with SQLite storage
 - Bot API 9.4 inline control button styles
 - Dockerfile, docker-compose, CI workflow
@@ -26,7 +27,7 @@ Telegram Bot API bots cannot directly join voice chats. This project uses two cl
 1. **Bot account** — handles commands like `/play`, `/skip`, `/pause`.
 2. **Assistant user account** — joins the voice chat and streams audio.
 
-Add both the bot and assistant account to your group. The assistant should be an admin or at least allowed to join/speak in voice chat.
+Add the bot to your group and promote it with **Invite Users/Add Members** permission. On `/play` or `/vplay`, the bot auto-invites the assistant account when needed. The assistant may need **Manage Voice Chats / Video Chats** permission in groups that restrict voice-chat control.
 
 ## Requirements
 
@@ -119,6 +120,7 @@ docker compose up -d --build
 - `/shuffle`
 - `/join`
 - `/leave`
+- `/assistant` or `/inviteassistant` — manually reconnect the assistant if needed
 
 ### Admin / DJ
 

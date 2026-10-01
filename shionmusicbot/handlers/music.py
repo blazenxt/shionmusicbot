@@ -76,6 +76,13 @@ async def _safe_status(status, text: str) -> None:
         pass
 
 
+async def _reply_or_send(message, text: str, **kwargs):
+    try:
+        return await message.reply_text(text, **kwargs)
+    except Exception:
+        return await bot.send_message(message.chat.id, text, **kwargs)
+
+
 def _friendly_play_error(exc: Exception) -> str:
     raw = str(exc)
     if (
@@ -88,18 +95,25 @@ def _friendly_play_error(exc: Exception) -> str:
             "Telegram returned <code>CHANNEL_INVALID</code>, which means the assistant user "
             "account cannot resolve this group/channel from its own session.\n\n"
             "<b>Fix checklist:</b>\n"
-            "1. Add the assistant account to this exact group.\n"
-            "2. Promote it as admin with <b>Manage Voice Chats / Video Chats</b>.\n"
-            "3. Start/open the group voice chat.\n"
-            "4. Send <code>/join</code>, then <code>/play song name</code>.\n\n"
-            "If this is an old/basic private group, convert it to a supergroup or make the "
-            "group public temporarily so the assistant can resolve it."
+            "1. Promote the bot with <b>Invite Users/Add Members</b> permission.\n"
+            "2. Start/open the group voice chat.\n"
+            "3. Use <code>/play song name</code>; I will auto-invite the assistant.\n"
+            "4. If needed, promote the assistant with <b>Manage Voice Chats / Video Chats</b>.\n\n"
+            "For old/basic private groups, convert to a supergroup if Telegram still "
+            "rejects the assistant peer."
         )
     return f"⚠️ <b>Error:</b> <code>{raw}</code>\n\n{VC_JOIN_HINT}"
 
 
 async def _run_play_request(message, status, query: str, *, force: bool, video: bool) -> None:
     try:
+        await _safe_status(
+            status,
+            "🤖 <b>Checking assistant access</b>\n"
+            "├ Auto-inviting assistant if this group needs it...\n"
+            "└ Then I will prepare the stream.",
+        )
+        await player.ensure_assistant_joined(message.chat)
         if query:
             await _safe_status(
                 status,
@@ -130,7 +144,7 @@ async def _run_play_request(message, status, query: str, *, force: bool, video: 
         try:
             await status.edit_text(text, disable_web_page_preview=True)
         except Exception:
-            await message.reply_text(text, disable_web_page_preview=True)
+            await _reply_or_send(message, text, disable_web_page_preview=True)
         return
 
     if result.started:
@@ -153,18 +167,18 @@ async def _run_play_request(message, status, query: str, *, force: bool, video: 
 async def play_handler(client, message):
     player.remember_chat(message.chat)
     if not await _play_allowed(client, message):
-        return await message.reply_text(NEED_ADMIN)
+        return await _reply_or_send(message, NEED_ADMIN)
 
     query = _args(message)
     if not query and not message.reply_to_message:
-        return await message.reply_text(NEED_QUERY)
+        return await _reply_or_send(message, NEED_QUERY)
 
     command = (message.command[0] or "").lower()
     force = command in {"playforce", "fplay"}
     stream_mode = await db.get_setting(message.chat.id, "stream_mode", "audio")
     video = command in {"vplay", "vstream"} or stream_mode == "video"
-    status = await message.reply_text(
-        "📺 Fast video mode starting..." if video else "⚡ Fast audio mode starting..."
+    status = await _reply_or_send(
+        message, "📺 Fast video mode starting..." if video else "⚡ Fast audio mode starting..."
     )
     task = asyncio.create_task(_run_play_request(message, status, query, force=force, video=video))
     task.add_done_callback(_log_task_result)
@@ -176,11 +190,12 @@ async def play_handler(client, message):
 async def radio_handler(client, message):
     player.remember_chat(message.chat)
     if not await _play_allowed(client, message):
-        return await message.reply_text(NEED_ADMIN)
+        return await _reply_or_send(message, NEED_ADMIN)
     query = _args(message)
     if not query or not is_url(query):
-        return await message.reply_text(
-            "Send a direct radio/stream URL. Example: <code>/radio https://example.com/live.mp3</code>"
+        return await _reply_or_send(
+            message,
+            "Send a direct radio/stream URL. Example: <code>/radio https://example.com/live.mp3</code>",
         )
     requester_id, requester_name = _requester(message)
     track = Track(
@@ -191,8 +206,10 @@ async def radio_handler(client, message):
         webpage_url=query,
         is_live=True,
     )
-    status = await message.reply_text("📻 Starting radio stream...")
+    status = await _reply_or_send(message, "📻 Starting radio stream...")
     try:
+        await _safe_status(status, "🤖 Auto-inviting assistant if needed...")
+        await player.ensure_assistant_joined(message.chat)
         result = await player.add_track(message.chat.id, track)
     except Exception as exc:
         return await status.edit_text(f"⚠️ <b>Error:</b> <code>{exc}</code>")
@@ -207,18 +224,23 @@ async def radio_handler(client, message):
 @bot.on_message(_cmd(["playlist", "pl"]) & filters.group)
 @group_only
 async def playlist_handler(client, message):
+    player.remember_chat(message.chat)
     if not await _play_allowed(client, message):
-        return await message.reply_text(NEED_ADMIN)
+        return await _reply_or_send(message, NEED_ADMIN)
 
     query = _args(message)
     if not query and message.reply_to_message:
         query = message.reply_to_message.text or message.reply_to_message.caption or ""
     if not query:
-        return await message.reply_text("Send a playlist URL or a newline-separated song list.")
+        return await _reply_or_send(
+            message, "Send a playlist URL or a newline-separated song list."
+        )
 
     requester_id, requester_name = _requester(message)
-    status = await message.reply_text("📜 Resolving playlist...")
+    status = await _reply_or_send(message, "📜 Resolving playlist...")
     try:
+        await _safe_status(status, "🤖 Auto-inviting assistant if needed...")
+        await player.ensure_assistant_joined(message.chat)
         tracks: list[Track]
         lines = [line.strip() for line in query.splitlines() if line.strip()]
         if len(lines) > 1 and not is_url(query.strip()):
@@ -294,7 +316,9 @@ async def skip_handler(_, message):
     if next_track:
         await message.reply_text(f"⏭ Skipped. Now playing: <b>{next_track.display_title}</b>")
     else:
-        await message.reply_text("⏭ Skipped. Queue finished.")
+        await message.reply_text(
+            "⏭ Skipped. Queue finished. I will leave VC after 5 minutes of inactivity."
+        )
 
 
 @bot.on_message(_cmd(["stop", "end", "cancel"]) & filters.group)
@@ -309,6 +333,7 @@ async def stop_handler(_, message):
 async def join_handler(_, message):
     player.remember_chat(message.chat)
     try:
+        await player.ensure_assistant_joined(message.chat)
         await player.join(message.chat.id)
     except Exception as exc:
         return await message.reply_text(_friendly_play_error(exc), disable_web_page_preview=True)

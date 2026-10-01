@@ -4,8 +4,8 @@ START_TEXT = """
 <b>🎧 Shion Music bot</b>
 
 I stream high-quality music in Telegram group voice chats.
-Add the assistant account to your group, start a voice chat, and use
-<code>/play song name</code> to begin.
+Start a voice chat and use <code>/play song name</code>.
+I auto-invite the assistant when the bot has invite permission.
 
 <b>Maintainer:</b> @zucms
 """.strip()
@@ -45,7 +45,8 @@ HELP_TEXT = """
 
 <b>Notes</b>
 The bot account handles commands.
-The assistant user account joins the voice chat and streams audio.
+The assistant user joins only when needed, leaves VC after 5 minutes idle,
+and leaves the group after 1 hour of inactivity.
 """.strip()
 
 ABOUT_TEXT = """
@@ -63,4 +64,7 @@ NEED_QUERY = (
 SEARCHING = "🔎 Searching / preparing track..."
 NO_QUEUE = "The queue is empty."
 NOTHING_PLAYING = "Nothing is playing right now."
-VC_JOIN_HINT = "Start a voice chat and add/promote the assistant account in the group."
+VC_JOIN_HINT = (
+    "Start a voice chat and promote the bot with invite permission so it can "
+    "auto-invite the assistant."
+)
