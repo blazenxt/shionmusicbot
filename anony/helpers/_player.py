@@ -52,12 +52,18 @@ async def start_stream(chat_id: int, track, announce: bool = True) -> None:
     if not url:
         raise RuntimeError("no stream URL available")
 
+    # Testweb3 recovery URLs are short-lived compatibility tokens. ffprobe and
+    # ffmpeg may each open an input, which can consume/expire the same token.
+    # Materialise one fresh response privately, then let PyTgCalls probe and
+    # stream the stable local file.
     try:
-        await call.play(chat_id, url, video=track.is_video)
-    except Exception as exc:  # noqa: BLE001 - fall back to local file
-        log.warning("Direct piping failed (%s); downloading instead…", exc)
         path = await _download(url, track)
         await call.play(chat_id, path, video=track.is_video)
+    except Exception as local_exc:  # noqa: BLE001 - last-resort direct pipe
+        log.warning("Local stream preparation failed (%s); trying direct piping…", local_exc)
+        info = await youtube.refresh_stream(track.media.video_id)
+        direct_url = (info or {}).get("stream_url") or url
+        await call.play(chat_id, direct_url, video=track.is_video)
 
     queue.setnow(chat_id, track)
     await db.incr_counter("plays")
@@ -94,27 +100,48 @@ async def start_stream(chat_id: int, track, announce: bool = True) -> None:
 
 
 async def _download(url: str, track) -> str:
-    """Download the stream to ``downloads/`` as a playback fallback."""
+    """Download one fresh Testweb3 response, retrying token/upstream failures."""
     import os
+
+    import aiohttp
 
     from anony.core.dir import DOWNLOADS
 
-    path = DOWNLOADS / f"{track.media.video_id}.mp3"
-    if path.exists() and path.stat().st_size > 10_000:
+    path = DOWNLOADS / f"{track.media.video_id}.mp4"
+    if path.exists() and path.stat().st_size > 100_000:
         return str(path)
-
-    from anony.core.youtube import youtube
 
     session = await youtube.session()
     DOWNLOADS.mkdir(parents=True, exist_ok=True)
     tmp = str(path) + ".part"
-    async with session.get(url) as response:
-        response.raise_for_status()
-        with open(tmp, "wb") as fh:
-            async for chunk in response.content.iter_chunked(1 << 16):
-                fh.write(chunk)
-    os.replace(tmp, path)
-    return str(path)
+    last_error: Exception | None = None
+    current_url = url
+    for attempt in range(3):
+        if attempt:
+            info = await youtube.refresh_stream(track.media.video_id)
+            current_url = (info or {}).get("stream_url") or current_url
+            await asyncio.sleep(1.5 * attempt)
+        try:
+            async with session.get(
+                current_url,
+                timeout=aiohttp.ClientTimeout(total=180, connect=15),
+            ) as response:
+                response.raise_for_status()
+                with open(tmp, "wb") as fh:
+                    async for chunk in response.content.iter_chunked(1 << 16):
+                        fh.write(chunk)
+            if os.path.getsize(tmp) < 100_000:
+                raise RuntimeError("Testweb3 returned an incomplete media file")
+            os.replace(tmp, path)
+            return str(path)
+        except Exception as exc:  # noqa: BLE001 - retry fresh recovery token
+            last_error = exc
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            log.warning("Testweb3 download attempt %d failed: %s", attempt + 1, exc)
+    raise RuntimeError(f"Testweb3 download failed after retries: {last_error}")
 
 
 async def on_stream_end(chat_id: int) -> None:

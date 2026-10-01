@@ -311,7 +311,15 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    # Runtime singletons (notably PyTgCalls/NTgCalls) are constructed while
+    # importing ``anony`` and bind futures to Python's current default loop.
+    # ``asyncio.run`` would create a different loop and break the first call
+    # with "Future attached to a different loop".
+    _loop = asyncio.get_event_loop()
     try:
-        asyncio.run(main())
+        _loop.run_until_complete(main())
     except KeyboardInterrupt:
         pass
+    finally:
+        if not _loop.is_closed():
+            _loop.close()
