@@ -19,7 +19,10 @@ from typing import Awaitable, Callable, List, Optional
 from pytgcalls import PyTgCalls
 from pytgcalls import filters as call_filters
 from pytgcalls.types import GroupCallConfig, MediaStream, StreamEnded
+from pytgcalls.types.raw import Stream as RawStream
 from pytgcalls.types.stream import AudioQuality, VideoQuality
+
+from anony.core.live_proxy import live_hls_proxy
 
 log = logging.getLogger(__name__)
 
@@ -29,11 +32,14 @@ StreamEndCallback = Callable[[int], Awaitable[None]]
 class TgCall:
     """Thin, defensive wrapper around the PyTgCalls engine."""
 
+    LIVE_RELAY_NATIVE = True
+
     def __init__(self, userbot) -> None:
         self.userbot = userbot
         self.app = PyTgCalls(userbot)
         self._started = False
         self._on_stream_end: Optional[StreamEndCallback] = None
+        self._live_proxy_tokens: dict[int, str] = {}
 
         # Register the stream-end dispatcher (PyTgCalls v3 update system).
         self.app.on_update(call_filters.stream_end())(self._dispatch_stream_end)
@@ -53,9 +59,10 @@ class TgCall:
         try:
             for chat_id in await self.active_chats():
                 try:
-                    await self.app.leave_call(chat_id)
+                    await self.stop(chat_id)
                 except Exception:  # noqa: BLE001 - best effort shutdown
                     pass
+            await live_hls_proxy.close()
         except Exception as exc:  # noqa: BLE001
             log.warning("stop_all failed: %s", exc)
 
@@ -87,18 +94,46 @@ class TgCall:
         When a call is already active in the chat, PyTgCalls swaps the
         source seamlessly (``set_stream_sources``).
         """
-        stream = MediaStream(
-            url,
+        previous_token = self._live_proxy_tokens.get(chat_id)
+        new_token: Optional[str] = None
+        stream_url = url
+        stream_headers = headers or None
+        if headers:
+            # Keep protected CDN requests out of static FFmpeg's TLS stack.
+            # The loopback relay applies the browser headers and recursively
+            # rewrites nested playlists/segments.  Wrapping MediaStream in a
+            # raw Stream intentionally skips ffprobe (some valid live CDNs
+            # make static ffprobe crash before it can return metadata).
+            stream_url, new_token = await live_hls_proxy.register(url, headers)
+            stream_headers = None
+
+        media = MediaStream(
+            stream_url,
             audio_parameters=AudioQuality.HIGH,
             video_parameters=VideoQuality.SD_360p,
+            audio_path=stream_url if new_token else None,
             audio_flags=MediaStream.Flags.AUTO_DETECT,
             video_flags=(
                 MediaStream.Flags.AUTO_DETECT if video else MediaStream.Flags.IGNORE
             ),
-            headers=headers or None,
+            headers=stream_headers,
             ffmpeg_parameters=f"-ss {int(seek)}" if seek > 0 else None,
         )
-        await self.app.play(chat_id, stream, config=GroupCallConfig(auto_start=True))
+        stream = (
+            RawStream(microphone=media.microphone, camera=media.camera)
+            if new_token
+            else media
+        )
+        try:
+            await self.app.play(chat_id, stream, config=GroupCallConfig(auto_start=True))
+        except Exception:
+            live_hls_proxy.unregister(new_token)
+            raise
+        if new_token:
+            self._live_proxy_tokens[chat_id] = new_token
+        else:
+            self._live_proxy_tokens.pop(chat_id, None)
+        live_hls_proxy.unregister(previous_token)
 
     async def pause(self, chat_id: int) -> None:
         await self.app.pause(chat_id)
@@ -112,6 +147,8 @@ class TgCall:
             await self.app.leave_call(chat_id)
         except Exception as exc:  # noqa: BLE001 - NotInCallError etc.
             log.debug("leave_call(%s): %s", chat_id, exc)
+        finally:
+            live_hls_proxy.unregister(self._live_proxy_tokens.pop(chat_id, None))
 
     async def time(self, chat_id: int) -> int:
         """Current playback position in seconds (0 when not playing)."""

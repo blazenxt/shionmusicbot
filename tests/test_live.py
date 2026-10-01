@@ -1,8 +1,11 @@
 """Live page/HLS resolver and Telegram 9.4 style tests."""
 
+import urllib.parse
+
 import pytest
 
 from anony.core.live import LiveResolveError, _parse_m3u, _validate_public_url
+from anony.core.live_proxy import LiveHLSProxy
 from anony.helpers._inline import DANGER, PRIMARY, SUCCESS, stream_controls
 
 
@@ -33,6 +36,28 @@ def test_parse_m3u_rejects_other_channel():
 async def test_live_url_ssrf_guard_rejects_loopback():
     with pytest.raises(LiveResolveError):
         await _validate_public_url("http://127.0.0.1/private.m3u8")
+
+
+def test_hls_proxy_rewrites_relative_segments_and_uri_attributes():
+    proxy = LiveHLSProxy()
+    proxy._port = 12345
+    rewritten = proxy._rewrite_playlist(
+        '#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI="keys/key.bin"\nvideo/segment.ts\n',
+        "https://cdn.example.com/live/master.m3u8",
+        "test-token",
+    )
+    relay_urls = []
+    for value in rewritten.replace('URI="', "\n").replace('"', "\n").splitlines():
+        if value.startswith("http://127.0.0.1:12345/test-token/"):
+            relay_urls.append(value)
+    decoded = {
+        proxy._decode(urllib.parse.urlsplit(url).path.rsplit("/", 1)[-1])
+        for url in relay_urls
+    }
+    assert decoded == {
+        "https://cdn.example.com/live/keys/key.bin",
+        "https://cdn.example.com/live/video/segment.ts",
+    }
 
 
 def test_telegram_94_semantic_button_styles():
