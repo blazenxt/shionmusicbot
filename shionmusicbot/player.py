@@ -3,15 +3,18 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import shlex
 import time
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Deque
 
+from ntgcalls import MediaSource
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from pytgcalls import filters as call_filters
-from pytgcalls.types import AudioQuality, GroupCallConfig, MediaStream, StreamEnded, VideoQuality
+from pytgcalls.types import GroupCallConfig, StreamEnded
+from pytgcalls.types.raw import AudioParameters, AudioStream, Stream, VideoParameters, VideoStream
 
 from .models import Track
 from .utils import format_duration, html_user, split_text
@@ -25,15 +28,6 @@ class LoopMode:
     QUEUE = "queue"
 
     ALL = {OFF, ONE, QUEUE}
-
-
-class PresentationMediaStream(MediaStream):
-    """MediaStream variant that publishes video as VC presentation/screen share."""
-
-    async def check_stream(self):
-        await super().check_stream()
-        self.screen = self.camera
-        self.camera = None
 
 
 @dataclass(slots=True)
@@ -129,11 +123,64 @@ class Player:
             first = False
         return count, started
 
+    def _ffmpeg_input_args(self, track: Track) -> list[str]:
+        args = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "quiet"]
+        if track.start_at and track.start_at > 0:
+            args += ["-ss", str(int(track.start_at))]
+        if track.source.startswith(("http://", "https://")):
+            args += [
+                "-reconnect",
+                "1",
+                "-reconnect_streamed",
+                "1",
+                "-reconnect_delay_max",
+                "2",
+            ]
+        if track.headers:
+            header_blob = "".join(f"{key}: {value}\r\n" for key, value in track.headers.items())
+            args += ["-headers", header_blob]
+        args += ["-i", track.source]
+        return args
+
+    def _audio_command(self, track: Track) -> str:
+        args = self._ffmpeg_input_args(track)
+        args += ["-vn", "-f", "s16le", "-ac", "2", "-ar", "48000", "pipe:1"]
+        return shlex.join(args)
+
+    def _video_command(self, track: Track) -> str:
+        args = self._ffmpeg_input_args(track)
+        args += [
+            "-an",
+            "-f",
+            "rawvideo",
+            "-r",
+            "30",
+            "-pix_fmt",
+            "yuv420p",
+            "-vf",
+            "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2",
+            "pipe:1",
+        ]
+        return shlex.join(args)
+
+    def _build_fast_stream(self, track: Track) -> Stream:
+        audio_parameters = AudioParameters(48000, 2)
+        microphone = AudioStream(
+            MediaSource.SHELL,
+            self._audio_command(track),
+            audio_parameters,
+        )
+        screen = None
+        if track.video:
+            screen = VideoStream(
+                MediaSource.SHELL,
+                self._video_command(track),
+                VideoParameters(1280, 720, 30, adjust_by_height=False),
+            )
+        return Stream(microphone=microphone, screen=screen)
+
     async def _play_track(self, chat_id: int, track: Track) -> None:
         state = self.state(chat_id)
-        ffmpeg_parameters = None
-        if track.start_at and track.start_at > 0:
-            ffmpeg_parameters = f"--base ---start -ss {int(track.start_at)}"
 
         logger.info(
             "Playing in %s: %s%s",
@@ -141,15 +188,7 @@ class Player:
             track.title,
             " [video]" if track.video else "",
         )
-        stream_type = PresentationMediaStream if track.video else MediaStream
-        stream = stream_type(
-            track.source,
-            audio_parameters=AudioQuality.HIGH,
-            video_parameters=VideoQuality.HD_720p,
-            audio_flags=MediaStream.Flags.REQUIRED,
-            video_flags=MediaStream.Flags.REQUIRED if track.video else MediaStream.Flags.IGNORE,
-            ffmpeg_parameters=ffmpeg_parameters,
-        )
+        stream = self._build_fast_stream(track)
         await asyncio.wait_for(
             self.calls.play(
                 chat_id,

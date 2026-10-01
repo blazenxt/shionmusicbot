@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from uuid import uuid4
 
@@ -17,6 +17,7 @@ class Track:
     webpage_url: str | None = None
     thumbnail: str | None = None
     cleanup_path: Path | None = None
+    headers: dict[str, str] = field(default_factory=dict)
     is_live: bool = False
     video: bool = False
     start_at: int = 0

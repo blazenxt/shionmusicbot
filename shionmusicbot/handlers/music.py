@@ -14,7 +14,6 @@ from ..strings import (
     NEED_QUERY,
     NO_QUEUE,
     NOTHING_PLAYING,
-    SEARCHING,
     VC_JOIN_HINT,
 )
 from ..utils import format_duration, html_user, is_url, parse_duration, split_text
@@ -70,9 +69,38 @@ def _log_task_result(task: asyncio.Task) -> None:
         logger.error("Background play task crashed", exc_info=(type(exc), exc, exc.__traceback__))
 
 
+async def _safe_status(status, text: str) -> None:
+    try:
+        await status.edit_text(text, disable_web_page_preview=True)
+    except Exception:
+        pass
+
+
 async def _run_play_request(message, status, query: str, *, force: bool, video: bool) -> None:
     try:
+        if query:
+            await _safe_status(
+                status,
+                "⚡ <b>Fast mode</b>\n"
+                "├ Searching on Premium Tube/Testweb3...\n"
+                "└ Preparing direct FFmpeg stream headers...",
+            )
+        else:
+            await _safe_status(
+                status,
+                "📥 <b>Reply media mode</b>\n"
+                "├ Downloading Telegram media first...\n"
+                "└ Then I will stream the local file to VC.",
+            )
         track = await _prepare_track(message, query, video=video)
+        await _safe_status(
+            status,
+            "✅ <b>Source ready</b>\n"
+            f"├ <b>{track.display_title}</b>\n"
+            f"├ Mode: <code>{'video + screen-share' if track.video else 'audio'}</code>\n"
+            f"└ Duration: <code>{track.display_duration}</code>\n\n"
+            "📡 Connecting to Telegram voice chat...",
+        )
         result = await player.add_track(message.chat.id, track, force=force)
     except Exception as exc:
         logger.exception("Play request failed in %s", getattr(message.chat, "id", "unknown"))
@@ -111,7 +139,9 @@ async def play_handler(client, message):
     command = (message.command[0] or "").lower()
     force = command in {"playforce", "fplay"}
     video = command in {"vplay", "vstream"}
-    status = await message.reply_text("📺 Preparing video stream..." if video else SEARCHING)
+    status = await message.reply_text(
+        "📺 Fast video mode starting..." if video else "⚡ Fast audio mode starting..."
+    )
     task = asyncio.create_task(_run_play_request(message, status, query, force=force, video=video))
     task.add_done_callback(_log_task_result)
     return None

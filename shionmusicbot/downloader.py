@@ -215,30 +215,24 @@ class Downloader:
                     f"Track too long: {duration // 60} min. Max {max_minutes} min allowed."
                 )
 
-            # Premium Tube stream.php links are long proxy URLs. PyTgCalls/FFmpeg can
-            # hang on some hosts when reading those URLs directly. Mature VC bots first
-            # prepare a local playable file; doing the same here keeps playback stable.
-            local_source = source_url
-            cleanup_path: Path | None = None
-            if not is_live_track and source_url.startswith("http"):
-                cleanup_path = await self._download_remote_media(
-                    session,
-                    source_url,
-                    video_id=video_id,
-                    referer=api_base,
-                )
-                local_source = str(cleanup_path)
+            # Keep the stream remote and pass Premium Tube headers to FFmpeg.
+            # This starts much faster than downloading the whole MP4 first, while
+            # avoiding the 403/hang issues caused by missing User-Agent/Referer.
+            stream_headers = {
+                "User-Agent": PREMIUMTUBE_HEADERS["User-Agent"],
+                "Referer": api_base,
+            }
 
         webpage_url = urljoin(api_base, f"?v={video_id}")
         return Track(
             title=str(payload.get("title") or query),
-            source=local_source,
+            source=source_url,
             requester_id=requester_id,
             requester_name=requester_name,
             duration=duration,
             webpage_url=webpage_url,
             thumbnail=payload.get("thumbnail"),
-            cleanup_path=cleanup_path,
+            headers=stream_headers,
             is_live=is_live_track,
         )
 
