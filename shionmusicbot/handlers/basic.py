@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import re
 import time
 
 from pyrogram import filters
@@ -16,6 +18,22 @@ BUTTON_PRIMARY = KeyboardButtonStyle(bg_primary=True)
 
 def _cmd(names: str | list[str]):
     return filters.command(names, prefixes=list(CONFIG.command_prefixes))
+
+
+async def _delete_later(message, delay: int = 4) -> None:
+    await asyncio.sleep(delay)
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+
+_prefix_pattern = "".join(re.escape(prefix) for prefix in CONFIG.command_prefixes)
+
+
+@bot.on_message(filters.group & filters.regex(rf"^[{_prefix_pattern}][A-Za-z0-9_@]+"), group=-1)
+async def auto_delete_command_handler(_, message):
+    asyncio.create_task(_delete_later(message))
 
 
 @bot.on_message(_cmd(["start", "alive"]))

@@ -46,12 +46,16 @@ class Downloader:
         self.cookie_file = cookie_file
         self.yt_api_base = yt_api_base.rstrip("/") if yt_api_base else None
 
-    async def resolve(self, query: str, requester_id: int, requester_name: str) -> Track:
+    async def resolve(
+        self, query: str, requester_id: int, requester_name: str, *, video: bool = False
+    ) -> Track:
         query = query.strip()
         if not query:
             raise DownloadError("Empty query")
 
-        external = await self._resolve_with_external_api(query, requester_id, requester_name)
+        external = await self._resolve_with_external_api(
+            query, requester_id, requester_name, video=video
+        )
         if external:
             return external
 
@@ -110,7 +114,7 @@ class Downloader:
         )
 
     async def _resolve_with_external_api(
-        self, query: str, requester_id: int, requester_name: str
+        self, query: str, requester_id: int, requester_name: str, *, video: bool = False
     ) -> Track | None:
         """Resolve through an optional self-hosted YouTube/PremiumTube endpoint.
 
@@ -121,7 +125,9 @@ class Downloader:
         if not self.yt_api_base:
             return None
         try:
-            premium = await self._resolve_with_premiumtube(query, requester_id, requester_name)
+            premium = await self._resolve_with_premiumtube(
+                query, requester_id, requester_name, video=video
+            )
             if premium:
                 return premium
         except DownloadError:
@@ -150,7 +156,7 @@ class Downloader:
                 payload = payload[0]
             if not isinstance(payload, dict):
                 return None
-            source = self._payload_source(payload)
+            source = self._payload_source(payload, video=video)
             if not source:
                 return None
             return Track(
@@ -166,7 +172,7 @@ class Downloader:
         return None
 
     async def _resolve_with_premiumtube(
-        self, query: str, requester_id: int, requester_name: str
+        self, query: str, requester_id: int, requester_name: str, *, video: bool = False
     ) -> Track | None:
         import aiohttp
 
@@ -203,7 +209,7 @@ class Downloader:
             payload = detail_data.get("data") or {}
             if not isinstance(payload, dict):
                 return None
-            source = self._payload_source(payload)
+            source = self._payload_source(payload, video=video)
             if not source:
                 return None
             source_url = urljoin(api_base, str(source))
@@ -281,7 +287,7 @@ class Downloader:
             raise
 
     @staticmethod
-    def _payload_source(payload: dict[str, Any]) -> str | None:
+    def _payload_source(payload: dict[str, Any], *, video: bool = False) -> str | None:
         direct = (
             payload.get("stream_url")
             or payload.get("audio_url")
@@ -290,10 +296,29 @@ class Downloader:
         )
         if direct:
             return str(direct)
+
+        qualities = payload.get("qualities")
+        if video and isinstance(qualities, list):
+            # Use a higher quality DASH manifest for /vplay instead of the 360p
+            # compatibility stream. Prefer 720p, then 480p/360p, then Auto.
+            quality_items = [q for q in qualities if isinstance(q, dict) and q.get("url")]
+            ranked = sorted(
+                quality_items,
+                key=lambda item: abs((_safe_int(item.get("height")) or 0) - 720),
+            )
+            for quality in ranked:
+                height = _safe_int(quality.get("height")) or 0
+                if height and height <= 720:
+                    return str(quality["url"])
+            for quality in quality_items:
+                if str(quality.get("label", "")).lower() == "auto":
+                    return str(quality["url"])
+            if quality_items:
+                return str(quality_items[0]["url"])
+
         recovery = payload.get("recovery_stream")
         if isinstance(recovery, dict) and recovery.get("url"):
             return str(recovery["url"])
-        qualities = payload.get("qualities")
         if isinstance(qualities, list):
             for quality in qualities:
                 if (

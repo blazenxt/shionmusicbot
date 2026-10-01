@@ -21,6 +21,7 @@ from .utils import format_duration, html_user, split_text
 
 logger = logging.getLogger(__name__)
 
+IDLE_LEAVE_SECONDS = 60 * 60
 BUTTON_PRIMARY = KeyboardButtonStyle(bg_primary=True)
 BUTTON_SUCCESS = KeyboardButtonStyle(bg_success=True)
 BUTTON_DANGER = KeyboardButtonStyle(bg_danger=True)
@@ -44,6 +45,7 @@ class QueueState:
     muted: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     suppress_end_until: float = 0.0
+    idle_leave_task: asyncio.Task | None = None
 
 
 @dataclass(slots=True)
@@ -124,6 +126,36 @@ class Player:
                 ) from exc
         return target
 
+    @staticmethod
+    def _cancel_idle_leave(state: QueueState) -> None:
+        if state.idle_leave_task and not state.idle_leave_task.done():
+            state.idle_leave_task.cancel()
+        state.idle_leave_task = None
+
+    def _schedule_idle_leave(self, chat_id: int) -> None:
+        state = self.state(chat_id)
+        self._cancel_idle_leave(state)
+        state.idle_leave_task = asyncio.create_task(self._idle_leave_after(chat_id))
+
+    async def _idle_leave_after(self, chat_id: int) -> None:
+        try:
+            await asyncio.sleep(IDLE_LEAVE_SECONDS)
+            state = self.state(chat_id)
+            async with state.lock:
+                if state.current or state.queue:
+                    return
+                state.idle_leave_task = None
+            try:
+                await self.calls.leave_call(self._chat_target(chat_id))
+            except Exception:
+                pass
+            await self.bot.send_message(
+                chat_id,
+                "👋 No new tracks were queued for 1 hour. Assistant left the voice chat.",
+            )
+        except asyncio.CancelledError:
+            return
+
     def register_call_handlers(self) -> None:
         if self._handlers_registered:
             return
@@ -139,6 +171,7 @@ class Player:
         should_start = False
         async with state.lock:
             if force:
+                self._cancel_idle_leave(state)
                 await self._cleanup_queue(state)
                 await self._cleanup_current(state)
                 state.queue.clear()
@@ -148,6 +181,7 @@ class Player:
                 should_start = True
                 position = 0
             elif state.current is None:
+                self._cancel_idle_leave(state)
                 state.current = track
                 state.paused = False
                 should_start = True
@@ -191,12 +225,24 @@ class Player:
             args += ["-ss", str(int(track.start_at))]
         if track.source.startswith(("http://", "https://")):
             args += [
+                "-rw_timeout",
+                "15000000",
                 "-reconnect",
+                "1",
+                "-reconnect_at_eof",
                 "1",
                 "-reconnect_streamed",
                 "1",
+                "-reconnect_on_network_error",
+                "1",
+                "-reconnect_on_http_error",
+                "4xx,5xx",
                 "-reconnect_delay_max",
-                "2",
+                "5",
+                "-fflags",
+                "+discardcorrupt",
+                "-err_detect",
+                "ignore_err",
             ]
         if track.headers:
             header_blob = "".join(f"{key}: {value}\r\n" for key, value in track.headers.items())
@@ -293,8 +339,6 @@ class Player:
         )
         if track.start_at:
             text += f"\n<b>Seek:</b> <code>{format_duration(track.start_at)}</code>"
-        if track.webpage_url:
-            text += f'\n<a href="{track.webpage_url}">Source</a>'
         await self.bot.send_message(
             chat_id,
             text,
@@ -338,7 +382,7 @@ class Player:
     async def on_stream_end(self, chat_id: int) -> None:
         state = self.state(chat_id)
         next_track: Track | None = None
-        leave = False
+        schedule_idle_leave = False
         ended_track: Track | None = None
 
         async with state.lock:
@@ -363,7 +407,8 @@ class Player:
                 else:
                     state.current = None
                     state.paused = False
-                    leave = self.config.auto_leave_when_queue_empty
+                    state.muted = False
+                    schedule_idle_leave = self.config.auto_leave_when_queue_empty
 
         if ended_track:
             await self._cleanup_track(ended_track)
@@ -374,12 +419,13 @@ class Player:
                 logger.exception("Autoplay next failed in %s", chat_id)
                 await self.bot.send_message(chat_id, f"⚠️ Next track failed: <code>{exc}</code>")
                 await self.on_stream_end(chat_id)
-        elif leave:
-            try:
-                await self.calls.leave_call(self._chat_target(chat_id))
-            except Exception:
-                pass
-            await self.bot.send_message(chat_id, "✅ Queue finished. Voice chat left.")
+        elif schedule_idle_leave:
+            self._schedule_idle_leave(chat_id)
+            await self.bot.send_message(
+                chat_id,
+                "✅ Queue finished. I will leave the voice chat if no one plays "
+                "anything for 1 hour.",
+            )
 
     async def pause(self, chat_id: int) -> None:
         state = self.state(chat_id)
@@ -446,6 +492,7 @@ class Player:
     async def stop(self, chat_id: int) -> None:
         state = self.state(chat_id)
         async with state.lock:
+            self._cancel_idle_leave(state)
             state.suppress_end_until = time.monotonic() + 4
             await self._cleanup_queue(state)
             await self._cleanup_current(state)

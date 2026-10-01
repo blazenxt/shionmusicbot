@@ -5,7 +5,7 @@ import logging
 
 from pyrogram import filters
 
-from ..clients import CONFIG, bot, db, downloader, player
+from ..clients import CONFIG, assistant, bot, db, downloader, player
 from ..decorators import admin_or_auth, group_only, is_authorized_user
 from ..models import Track
 from ..strings import (
@@ -53,7 +53,7 @@ async def _prepare_track(message, query: str, *, video: bool = False) -> Track:
     if reply and not query:
         track = await downloader.from_telegram_reply(reply, requester_id, requester_name)
     elif query:
-        track = await downloader.resolve(query, requester_id, requester_name)
+        track = await downloader.resolve(query, requester_id, requester_name, video=video)
     else:
         raise ValueError(NEED_QUERY)
     track.video = video
@@ -315,6 +315,41 @@ async def join_handler(_, message):
     await message.reply_text("✅ Joined voice chat.")
 
 
+@bot.on_message(_cmd(["assistant", "inviteassistant"]) & filters.group)
+@admin_or_auth
+async def assistant_handler(client, message):
+    player.remember_chat(message.chat)
+    raw = _args(message)
+    try:
+        me = await assistant.get_me()
+        invite = raw.strip() if raw and ("t.me/" in raw or raw.startswith("+")) else None
+        if invite:
+            try:
+                await assistant.join_chat(invite)
+            except Exception as exc:
+                if "already" not in str(exc).lower() and "participant" not in str(exc).lower():
+                    raise
+        else:
+            invite = await client.export_chat_invite_link(message.chat.id)
+            try:
+                await assistant.join_chat(invite)
+            except Exception as exc:
+                if "already" not in str(exc).lower() and "participant" not in str(exc).lower():
+                    raise
+        await message.reply_text(
+            "✅ Assistant is connected to this group.\n"
+            f"<b>Assistant:</b> {html_user(me.id, me.first_name)}\n\n"
+            "Now start/open the voice chat and use <code>/join</code> or <code>/play song</code>."
+        )
+    except Exception as exc:
+        await message.reply_text(
+            "⚠️ Assistant invite failed.\n\n"
+            "Make the bot admin with invite-link permission, or send an invite link like:\n"
+            "<code>/assistant https://t.me/+invite_code</code>\n\n"
+            f"<b>Details:</b> <code>{exc}</code>"
+        )
+
+
 @bot.on_message(_cmd(["leave", "leavevc"]) & filters.group)
 @admin_or_auth
 async def leave_handler(_, message):
@@ -503,7 +538,7 @@ async def settings_handler(_, message):
 async def callback_handler(client, query):
     action = query.data.split(":", 1)[1]
     if action == "help":
-        await query.message.reply_text(HELP_TEXT, disable_web_page_preview=True)
+        await query.message.edit_text(HELP_TEXT, disable_web_page_preview=True)
         return await query.answer()
 
     message = query.message
@@ -525,25 +560,46 @@ async def callback_handler(client, query):
     try:
         if action == "pause":
             await player.pause(chat_id)
+            text = player.now_text(chat_id) or NOTHING_PLAYING
+            await query.message.edit_text(
+                text, reply_markup=player.controls_markup(), disable_web_page_preview=True
+            )
             await query.answer("Paused")
         elif action == "resume":
             await player.resume(chat_id)
+            text = player.now_text(chat_id) or NOTHING_PLAYING
+            await query.message.edit_text(
+                text, reply_markup=player.controls_markup(), disable_web_page_preview=True
+            )
             await query.answer("Resumed")
         elif action == "mute":
             await player.mute(chat_id)
+            text = player.now_text(chat_id) or NOTHING_PLAYING
+            await query.message.edit_text(
+                text, reply_markup=player.controls_markup(), disable_web_page_preview=True
+            )
             await query.answer("Muted")
         elif action == "unmute":
             await player.unmute(chat_id)
+            text = player.now_text(chat_id) or NOTHING_PLAYING
+            await query.message.edit_text(
+                text, reply_markup=player.controls_markup(), disable_web_page_preview=True
+            )
             await query.answer("Unmuted")
         elif action == "skip":
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
             await player.skip(chat_id)
             await query.answer("Skipped")
         elif action == "stop":
             await player.stop(chat_id)
+            await query.message.edit_text("⏹ Stopped and left voice chat.")
             await query.answer("Stopped")
         elif action == "queue":
-            await query.answer("Queue sent")
-            await player.send_queue(chat_id)
+            await query.message.edit_text(player.queue_text(chat_id), disable_web_page_preview=True)
+            await query.answer("Queue updated")
         else:
             await query.answer("Unknown action", show_alert=True)
     except Exception as exc:
