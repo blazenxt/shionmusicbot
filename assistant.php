@@ -125,13 +125,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 $unlocked = !empty($_SESSION['manager_ok']);
 $step = (string) ($_SESSION['auth_step'] ?? 'phone');
-if ($unlocked && $step === 'phone') {
+if ($unlocked) {
     $pending_file = sh_runtime_dir() . '/auth/pending.json';
-    if (is_readable($pending_file)) {
-        $pending = json_decode((string) file_get_contents($pending_file), true);
-        if (is_array($pending) && in_array($pending['step'] ?? '', array('code', 'password'), true)) {
-            $step = (string) $pending['step'];
-        }
+    $pending = is_readable($pending_file)
+        ? json_decode((string) file_get_contents($pending_file), true)
+        : null;
+    $pending_valid = is_array($pending)
+        && in_array($pending['step'] ?? '', array('code', 'password'), true)
+        && time() - (int) ($pending['created_at'] ?? 0) <= 900;
+    if ($pending_valid) {
+        $step = (string) $pending['step'];
+        $_SESSION['auth_step'] = $step;
+    } elseif (in_array($step, array('code', 'password'), true)) {
+        // Do not leave the browser on a verification form after a reset or an
+        // expired/missing server-side login request.
+        $step = 'phone';
+        $_SESSION['auth_step'] = 'phone';
     }
 }
 
