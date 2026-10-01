@@ -8,6 +8,26 @@ PY="$RUNTIME/venv/bin/python3"
 PIDFILE="$RUNTIME/bot.pid"
 
 mkdir -p "$RUNTIME" "$RUNTIME/data"
+
+# Start the defensive cron/public-artifact guard first. It has its own lock and
+# is restarted here if a stale deployment process terminates it.
+GUARD="$PROJECT/cron_guard.sh"
+GUARD_PIDFILE="$RUNTIME/cron_guard.pid"
+GUARD_OK=0
+if [ -s "$GUARD_PIDFILE" ]; then
+  GUARD_PID="$(cat "$GUARD_PIDFILE" 2>/dev/null || true)"
+  if [[ "$GUARD_PID" =~ ^[0-9]+$ ]] && kill -0 "$GUARD_PID" 2>/dev/null; then
+    case "$(tr '\0' ' ' < "/proc/$GUARD_PID/cmdline" 2>/dev/null || true)" in
+      *cron_guard.sh*) GUARD_OK=1 ;;
+    esac
+  fi
+fi
+if [ "$GUARD_OK" != "1" ] && [ -f "$GUARD" ]; then
+  rm -f "$GUARD_PIDFILE"
+  nohup /bin/bash "$GUARD" >/dev/null 2>&1 < /dev/null &
+  echo $! > "$GUARD_PIDFILE"
+fi
+
 exec 9>"$RUNTIME/supervisor.lock"
 flock -n 9 || exit 0
 

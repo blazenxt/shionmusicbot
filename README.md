@@ -31,7 +31,9 @@ shared CyberPanel hosting with zero external database dependencies.
   a manager-key-protected Assistant Login flow (phone → OTP → optional 2FA),
   and a Web Audio Streamer. Session strings are written only to the private
   runtime outside `public_html`.
-- **Self-healing** — cron watchdog + `runner.php` control endpoint.
+- **Self-healing** — PID-safe cron watchdog + `runner.php` control endpoint.
+- **Deployment guard** — removes stale/concurrent Shion deployment cron jobs and
+  public debug artefacts while preserving the approved watchdog.
 
 ## 📦 Project layout
 

@@ -119,11 +119,20 @@ function sh_stop_bot(): void
 
 function sh_start_bot(): bool
 {
+    $runtime = sh_runtime_dir();
+    @mkdir($runtime, 0700, true);
+
+    // The shell watchdog starts both the defensive cron guard and the bot.
+    // It is safe and idempotent when either process is already running.
+    if (is_file(__DIR__ . '/ensure-running.sh')) {
+        $ensure = 'export SHION_RUNTIME_DIR=' . escapeshellarg($runtime) . '; '
+            . '/bin/bash ' . escapeshellarg(__DIR__ . '/ensure-running.sh');
+        @shell_exec('bash -c ' . escapeshellarg($ensure) . ' >/dev/null 2>&1');
+        usleep(250000);
+    }
     if (sh_proc_running()) {
         return true;
     }
-    $runtime = sh_runtime_dir();
-    @mkdir($runtime, 0700, true);
     @mkdir($runtime . '/data', 0700, true);
     $python = sh_python();
     $cmd = 'cd ' . escapeshellarg(__DIR__) . ' || exit 1; '

@@ -8,11 +8,14 @@ RewriteRule ^\. - [F,L]
 RewriteRule ^requirements - [F,L,NC]
 RewriteRule ^pytest\.ini$ - [F,L,NC]
 RewriteRule ^(README|LICENSE)(\.|$) - [F,L,NC]
-RewriteRule \.(env|log|json|py|pyc|sh|md|txt|ini|toml|ya?ml|gz|zip|tar|xz|session|tmp|part|lock|pid|bak|old|dist|whl)$ - [F,L,NC]
+RewriteRule ^.*\.(env|log|json|py|pyc|sh|md|txt|ini|toml|ya?ml|gz|zip|tar|xz|session|tmp|part|lock|pid|bak|old|dist|whl)$ - [F,L,NC]
 RewriteRule ^(anony|cache|downloads|data|venv|bin|tests|inc|docs|scripts|\.runtime|\.git)(/|$) - [R=404,L,NC]
 RewriteRule ^(runner_lib\.php|session_auth\.py|bootstrap\.sh|ensure-running\.sh)$ - [F,L,NC]
 
-<FilesMatch "^(\.env.*|\.git.*|requirements.*|runner_lib\.php|session_auth\.py)$">
+<FilesMatch "\.txt$">
+  Require all denied
+</FilesMatch>
+<FilesMatch "(^\.|^requirements|\.(env|log|json|py|pyc|sh|md|ini|toml|ya?ml|gz|zip|tar|xz|session|tmp|part|lock|pid|bak|old|dist|whl)$|^runner_lib\.php$|^session_auth\.py$)">
   Require all denied
 </FilesMatch>
 

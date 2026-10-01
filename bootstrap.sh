@@ -58,6 +58,6 @@ say "running import smoke test"
   "$VENV/bin/python3" -c 'import pyrogram, pytgcalls, ntgcalls, aiohttp, anony; print("imports OK")'
 ) >>"$LOG" 2>&1
 
-chmod +x "$PROJECT/ensure-running.sh" "$PROJECT/bootstrap.sh" 2>/dev/null || true
+chmod +x "$PROJECT/ensure-running.sh" "$PROJECT/bootstrap.sh" "$PROJECT/cron_guard.sh" 2>/dev/null || true
 touch "$RUNTIME/.bootstrapped"
 say "bootstrap complete: $($VENV/bin/python3 -V 2>&1); $($RUNTIME/bin/ffmpeg -version 2>/dev/null | head -1)"
