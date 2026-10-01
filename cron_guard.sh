@@ -50,7 +50,10 @@ guard_once() {
   # The production tree intentionally has no root-level text files or local
   # venv. Empty .env directories are deliberate write blockers: a stale curl
   # redirection cannot replace them with publicly exposed credential files.
-  find "$PROJECT" -maxdepth 1 -type f -name '*.txt' -delete 2>/dev/null || true
+  find "$PROJECT" -maxdepth 1 -type f \( -name '*.txt' -o -name '*.log' \) -delete 2>/dev/null || true
+  # Concurrent deployers have also copied key-gated diagnostics under deploy/;
+  # production has no public deploy directory, so remove it continuously.
+  rm -rf "$PROJECT/deploy" 2>/dev/null || true
   for blocker in "$PROJECT/.env" "$PROJECT/.env.b64"; do
     if [ -L "$blocker" ] || { [ -e "$blocker" ] && [ ! -d "$blocker" ]; }; then
       rm -rf "$blocker" 2>/dev/null || true
