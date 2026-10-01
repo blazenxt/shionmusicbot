@@ -313,18 +313,29 @@ async def radio_handler(client, message):
             "Send a direct radio/stream URL. Example: <code>/radio https://example.com/live.mp3</code>",
         )
     requester_id, requester_name = _requester(message)
-    track = Track(
-        title=query.rsplit("/", 1)[-1] or "Live radio",
-        source=query,
-        requester_id=requester_id,
-        requester_name=requester_name,
-        webpage_url=query,
-        is_live=True,
-    )
-    status = await _reply_or_send(message, "📻 Starting radio stream...")
+    status = await _reply_or_send(message, "📻 Resolving live stream...")
     try:
+        track = await downloader.resolve_live_stream(
+            query, requester_id, requester_name, video="player.html" in query.lower()
+        )
+        if track is None:
+            track = Track(
+                title=query.rsplit("/", 1)[-1] or "Live radio",
+                source=query,
+                requester_id=requester_id,
+                requester_name=requester_name,
+                webpage_url=query,
+                headers={"User-Agent": "Mozilla/5.0"},
+                is_live=True,
+            )
         await _safe_status(status, "🤖 Auto-inviting assistant if needed...")
         await player.ensure_assistant_joined(message.chat)
+        await _safe_status(
+            status,
+            "📡 <b>Live stream ready</b>\n"
+            f"├ <b>{track.display_title}</b>\n"
+            f"└ Mode: <code>{'video + screen-share' if track.video else 'audio'}</code>",
+        )
         result = await player.add_track(message.chat.id, track)
     except Exception as exc:
         return await status.edit_text(f"⚠️ <b>Error:</b> <code>{exc}</code>")

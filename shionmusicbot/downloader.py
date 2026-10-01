@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import uuid
@@ -21,6 +22,14 @@ PREMIUMTUBE_HEADERS = {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
     ),
+}
+LIVE_TV_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
+    ),
+    "Referer": "https://www.sonyliv.com/",
+    "Origin": "https://www.sonyliv.com",
 }
 
 
@@ -52,6 +61,13 @@ class Downloader:
         query = query.strip()
         if not query:
             raise DownloadError("Empty query")
+
+        if is_url(query):
+            live_track = await self.resolve_live_stream(
+                query, requester_id, requester_name, video=video
+            )
+            if live_track:
+                return live_track
 
         external = await self._resolve_with_external_api(
             query, requester_id, requester_name, video=video
@@ -112,6 +128,155 @@ class Downloader:
             cleanup_path=Path(path),
             is_live=False,
         )
+
+    async def resolve_live_stream(
+        self, query: str, requester_id: int, requester_name: str, *, video: bool = False
+    ) -> Track | None:
+        """Resolve direct/live URLs and known web-player pages into FFmpeg streams."""
+        if not is_url(query):
+            return None
+        parsed = urlparse(query)
+        host = parsed.netloc.lower()
+        path = parsed.path.lower()
+
+        if "premiumplugx.me" in host and "/sliv/player.html" in path:
+            return await self._resolve_premiumplugx_sliv(
+                query, requester_id, requester_name, video=True
+            )
+
+        if query.lower().endswith((".m3u8", ".mpd")) or ".m3u8?" in query.lower():
+            return Track(
+                title=query.rsplit("/", 1)[-1].split("?", 1)[0] or "Live stream",
+                source=query,
+                requester_id=requester_id,
+                requester_name=requester_name,
+                webpage_url=query,
+                headers={"User-Agent": PREMIUMTUBE_HEADERS["User-Agent"]},
+                is_live=True,
+                video=video,
+            )
+        return None
+
+    async def _resolve_premiumplugx_sliv(
+        self, query: str, requester_id: int, requester_name: str, *, video: bool = True
+    ) -> Track | None:
+        import aiohttp
+
+        parsed = urlparse(query)
+        params = parse_qs(parsed.query)
+        channel_id = (params.get("id") or [""])[0].strip()
+        if not channel_id:
+            raise DownloadError("PremiumPlugx player URL is missing channel id.")
+
+        playlist_url = "https://premiumplugx.com/Sliv/sony_playlist.php?m3u"
+        request_headers = {
+            "User-Agent": PREMIUMTUBE_HEADERS["User-Agent"],
+            "Referer": "https://premiumplugx.me/sliv/",
+            "Origin": "https://premiumplugx.me",
+        }
+        timeout = aiohttp.ClientTimeout(total=45, sock_connect=15, sock_read=30)
+        async with aiohttp.ClientSession(headers=request_headers, timeout=timeout) as session:
+            async with session.get(
+                playlist_url, params={"_t": str(int(asyncio.get_running_loop().time() * 1000))}
+            ) as response:
+                if response.status >= 400:
+                    raise DownloadError(f"Live TV playlist returned HTTP {response.status}")
+                playlist = await response.text()
+
+        entry = self._find_m3u_entry(playlist, channel_id)
+        if not entry:
+            raise DownloadError(f"Live TV channel not found in playlist: {channel_id}")
+        stream_url = entry["url"]
+        title = entry.get("name") or channel_id
+        headers = self._normalise_stream_headers(entry.get("headers") or {})
+        if not headers:
+            headers = dict(LIVE_TV_HEADERS)
+        return Track(
+            title=title,
+            source=stream_url,
+            requester_id=requester_id,
+            requester_name=requester_name,
+            webpage_url=query,
+            headers=headers,
+            is_live=True,
+            video=video,
+        )
+
+    @staticmethod
+    def _find_m3u_entry(playlist: str, channel_id: str) -> dict[str, Any] | None:
+        current: dict[str, Any] | None = None
+        pending_headers: dict[str, str] = {}
+        wanted = channel_id.lower()
+        for raw in playlist.splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            if line.startswith("#EXTINF:"):
+                attrs: dict[str, str] = {}
+                for match in re.finditer(r'([\w-]+)="([^"]*)"', line):
+                    attrs[match.group(1).lower()] = match.group(2)
+                comma = line.rfind(",")
+                name = line[comma + 1 :].strip() if comma != -1 else "Live TV"
+                current = {
+                    "id": attrs.get("tvg-id", ""),
+                    "name": name or attrs.get("tvg-name") or attrs.get("tvg-id") or "Live TV",
+                    "headers": {},
+                    "url": "",
+                }
+                pending_headers = {}
+                continue
+            if line.startswith("#EXTVLCOPT:http-user-agent="):
+                pending_headers["User-Agent"] = line.split("=", 1)[1]
+                continue
+            if line.startswith("#EXTVLCOPT:http-referrer="):
+                pending_headers["Referer"] = line.split("=", 1)[1]
+                continue
+            if line.startswith("#EXTVLCOPT:http-cookie="):
+                pending_headers["Cookie"] = line.split("=", 1)[1]
+                continue
+            if line.startswith("#EXTHTTP:"):
+                try:
+                    payload = json.loads(line.split(":", 1)[1])
+                    for key, value in payload.items():
+                        pending_headers[str(key)] = str(value)
+                except Exception:
+                    pass
+                continue
+            if line.startswith(("http://", "https://")) and current is not None:
+                current["url"] = line
+                current["headers"] = dict(pending_headers)
+                tvg_id = str(current.get("id") or "").lower()
+                name = str(current.get("name") or "").lower()
+                if tvg_id == wanted or wanted in {tvg_id, name} or wanted in line.lower():
+                    return current
+                current = None
+                pending_headers = {}
+        return None
+
+    @staticmethod
+    def _normalise_stream_headers(headers: dict[str, str]) -> dict[str, str]:
+        normalised: dict[str, str] = {}
+        for key, value in headers.items():
+            if not value:
+                continue
+            lowered = key.lower()
+            if lowered == "referrer":
+                normalised["Referer"] = value
+            elif lowered in {"user-agent", "referer", "origin", "cookie"}:
+                canonical = {
+                    "user-agent": "User-Agent",
+                    "referer": "Referer",
+                    "origin": "Origin",
+                    "cookie": "Cookie",
+                }[lowered]
+                normalised[canonical] = value
+        if "User-Agent" not in normalised:
+            normalised["User-Agent"] = LIVE_TV_HEADERS["User-Agent"]
+        if "Referer" not in normalised:
+            normalised["Referer"] = LIVE_TV_HEADERS["Referer"]
+        if "Origin" not in normalised:
+            normalised["Origin"] = LIVE_TV_HEADERS["Origin"]
+        return normalised
 
     async def _resolve_with_external_api(
         self, query: str, requester_id: int, requester_name: str, *, video: bool = False
