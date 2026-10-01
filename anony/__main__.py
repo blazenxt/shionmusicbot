@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import json
 import logging
 import logging.handlers
@@ -19,6 +20,31 @@ from anony.helpers._player import on_stream_end
 from config import config, validate
 
 log = logging.getLogger("anony.boot")
+_INSTANCE_LOCK = None
+
+
+def _acquire_instance_lock() -> bool:
+    """Hold a process-lifetime lock so only one bot consumes each update."""
+    global _INSTANCE_LOCK
+    path = dirutil.RUNTIME / "bot.instance.lock"
+    handle = path.open("a+", encoding="utf-8")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        # A duplicate launcher may already have replaced bot.pid with its own
+        # short-lived PID. Restore the real lock holder for the watchdog.
+        handle.seek(0)
+        holder = handle.read().strip()
+        if holder.isdigit():
+            (dirutil.RUNTIME / "bot.pid").write_text(holder + "\n", encoding="utf-8")
+        handle.close()
+        return False
+    handle.seek(0)
+    handle.truncate()
+    handle.write(str(os.getpid()))
+    handle.flush()
+    _INSTANCE_LOCK = handle
+    return True
 
 
 def setup_logging() -> None:
@@ -207,6 +233,9 @@ async def _start_bot_with_backoff(assistant_ready: bool) -> None:
 async def main() -> None:
     dirutil.ensure_dirs()
     setup_logging()
+    if not _acquire_instance_lock():
+        log.warning("Another ShionMusicBot instance already owns the runtime lock; exiting")
+        return
 
     problems = validate(require_assistant=False)
     if problems:

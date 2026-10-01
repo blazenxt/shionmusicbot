@@ -36,6 +36,15 @@ def test_handlers_registered_on_bot():
     assert any(handlers for handlers in groups.get(0, []))
 
 
+def test_private_fallback_does_not_shadow_commands():
+    from anony.plugins.misc import GROUP_ONLY_COMMANDS, KNOWN_COMMANDS
+
+    assert {"start", "help", "settings", "ping"}.issubset(KNOWN_COMMANDS)
+    assert {"play", "vplay", "queue", "skip"}.issubset(GROUP_ONLY_COMMANDS)
+    assert set(GROUP_ONLY_COMMANDS).issubset(KNOWN_COMMANDS)
+    assert len(KNOWN_COMMANDS) == len(set(KNOWN_COMMANDS))
+
+
 def test_callback_handler_registered():
     from pyrogram.handlers import CallbackQueryHandler
 

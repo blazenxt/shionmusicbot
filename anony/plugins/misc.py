@@ -55,13 +55,44 @@ async def cmd_autodelete(client, message):
 
 
 # ── private fallbacks ──────────────────────────────────────────────────
-@bot.on_message(filters.private & filters.text & filters.regex(r"^/"))
+# misc.py loads before several command modules. A broad /^\// handler here
+# would therefore consume valid commands (including /start) before their real
+# handlers are reached. Keep a complete command registry so this fallback only
+# catches genuinely unknown commands.
+KNOWN_COMMANDS = [
+    "start", "help", "settings", "id", "lang", "ping", "alive", "stats",
+    "auth", "unauth", "authusers", "blacklistchat", "whitelistchat",
+    "blacklistedchats", "broadcast", "loop", "pause", "play", "vplay",
+    "playforce", "vplayforce", "queue", "playlist", "resume", "seek",
+    "shuffle", "skip", "stop", "end", "addsudo", "delsudo", "sudolist",
+    "restart", "logs", "exec", "volume",
+]
+GROUP_ONLY_COMMANDS = [
+    "auth", "unauth", "authusers", "loop", "pause", "play", "vplay",
+    "playforce", "vplayforce", "queue", "playlist", "resume", "seek",
+    "shuffle", "skip", "stop", "end", "volume",
+]
+
+
+@bot.on_message(filters.private & filters.command(GROUP_ONLY_COMMANDS))
+@lang.language()
+async def private_group_command(client, message):
+    """Explain where voice-chat-only commands can be used."""
+    await message.reply_text(await lang.t(None, "private_hint"))
+
+
+@bot.on_message(
+    filters.private
+    & filters.text
+    & filters.regex(r"^/")
+    & ~filters.command(KNOWN_COMMANDS)
+)
 @lang.language()
 async def unknown_command(client, message):
     await message.reply_text(await lang.t(None, "no_command"))
 
 
-@bot.on_message(filters.private & filters.text)
+@bot.on_message(filters.private & filters.text & ~filters.regex(r"^/"))
 @lang.language()
 async def private_text(client, message):
     user = getattr(message, "from_user", None)
