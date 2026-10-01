@@ -56,7 +56,8 @@ ShionMusicBot/
 ├── index.php                 # dashboard: landing
 ├── status.php                # dashboard: live status & log console
 ├── commands.php              # dashboard: command explorer
-├── assistant.php             # secure phone/OTP/2FA assistant manager
+├── assistant.php             # read-only assistant/voice status
+├── assistant-login.php       # one-time phone/OTP/2FA provisioning (then 404)
 ├── session_auth.py           # private-stdin Telegram login bridge
 ├── webstream.php             # dashboard: web audio streamer
 ├── runner.php                # key-protected process control endpoint
@@ -112,8 +113,10 @@ venv/bin/python -m anony   # run the bot
 ## 🔐 Web endpoints
 
 - `index.php`, `status.php`, `commands.php`, `webstream.php` — public dashboard pages
-- `assistant.php` — management actions require the private manager key, CSRF
-  token, short-lived secure session cookie and server-side rate limits
+- `assistant-login.php` — one-time provisioning requires the private manager
+  key, CSRF token, short-lived secure cookie and server-side rate limits; after
+  a successful session save it is permanently gated with HTTP 404
+- `assistant.php` — read-only assistant and voice-engine status
 - `runner.php` — actions require `X-Runner-Key` (query-key fallback is retained
   for manual diagnostics)
 - `.htaccess` denies source, secrets, logs, archives and runtime directories;
