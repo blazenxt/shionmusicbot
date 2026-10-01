@@ -192,7 +192,16 @@ async def _start_bot_with_backoff(assistant_ready: bool) -> None:
                 await bot.disconnect()
             except Exception:
                 pass
-            await asyncio.sleep(wait)
+            # Refresh the web status while sleeping so the dashboard reports
+            # an intentional Telegram backoff instead of a stale/dead daemon.
+            while True:
+                remaining = retry_at - int(time.time())
+                if remaining <= 0:
+                    break
+                payload["ts"] = int(time.time())
+                payload["retry_after"] = remaining
+                _write_private_json("web_status.json", payload)
+                await asyncio.sleep(min(20, remaining))
 
 
 async def main() -> None:
