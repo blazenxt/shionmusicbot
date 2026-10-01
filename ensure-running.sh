@@ -4,7 +4,9 @@ set -u
 
 PROJECT="$(cd "$(dirname "$0")" && pwd)"
 RUNTIME="${SHION_RUNTIME_DIR:-$HOME/private/shionmusicbot_runtime}"
-PY="$RUNTIME/venv/bin/python3"
+VENV_PY="$RUNTIME/venv/bin/python3"
+PY="$RUNTIME/bin/python-safe"
+[ -x "$PY" ] || PY="$VENV_PY"
 PIDFILE="$RUNTIME/bot.pid"
 
 mkdir -p "$RUNTIME" "$RUNTIME/data"

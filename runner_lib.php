@@ -65,6 +65,10 @@ function sh_run(string $cmd): string
 
 function sh_python(): string
 {
+    $safe = sh_runtime_dir() . '/bin/python-safe';
+    if (is_executable($safe)) {
+        return $safe;
+    }
     $path = sh_runtime_dir() . '/venv/bin/python3';
     return is_executable($path) ? $path : 'python3';
 }

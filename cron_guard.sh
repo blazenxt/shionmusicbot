@@ -19,7 +19,8 @@ guard_once() {
 
   # CyberPanel installations may ship a non-setuid crontab binary. Use the
   # authenticated panel endpoint as the primary remover in that environment.
-  python="$RUNTIME/venv/bin/python3"
+  python="$RUNTIME/bin/python-safe"
+  [ -x "$python" ] || python="$RUNTIME/venv/bin/python3"
   [ -x "$python" ] || python="$(command -v python3)"
   if [ -f "$RUNTIME/panel_guard.json" ] && [ -f "$PROJECT/panel_cron_guard.py" ]; then
     panel_output="$(SHION_RUNTIME_DIR="$RUNTIME" "$python" "$PROJECT/panel_cron_guard.py" 2>&1 || true)"
@@ -47,9 +48,16 @@ guard_once() {
   rm -f "$current" "$filtered"
 
   # The production tree intentionally has no root-level text files or local
-  # environment/venv. These names are artefacts from old debug deployers.
+  # venv. Empty .env directories are deliberate write blockers: a stale curl
+  # redirection cannot replace them with publicly exposed credential files.
   find "$PROJECT" -maxdepth 1 -type f -name '*.txt' -delete 2>/dev/null || true
-  rm -f "$PROJECT/.env" "$PROJECT/.env.b64" 2>/dev/null || true
+  for blocker in "$PROJECT/.env" "$PROJECT/.env.b64"; do
+    if [ -L "$blocker" ] || { [ -e "$blocker" ] && [ ! -d "$blocker" ]; }; then
+      rm -rf "$blocker" 2>/dev/null || true
+    fi
+    mkdir -p "$blocker" 2>/dev/null || true
+    chmod 700 "$blocker" 2>/dev/null || true
+  done
   rm -rf "$PROJECT/bin" "$PROJECT/venv" "$PROJECT/__pycache__" 2>/dev/null || true
 
   if [ -f "$LOG" ] && [ "$(wc -c <"$LOG" 2>/dev/null || echo 0)" -gt 200000 ]; then

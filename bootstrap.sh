@@ -50,6 +50,15 @@ else
   exit 1
 fi
 
+# Keep the venv path out of the long-running process argv. Besides making
+# launches uniform, this prevents stale deployment jobs that target an old
+# venv command line from terminating the production process.
+cat >"$RUNTIME/bin/python-safe" <<EOF
+#!/usr/bin/env bash
+exec -a "$RUNTIME/bin/python-safe" "$VENV/bin/python3" "\$@"
+EOF
+chmod 700 "$RUNTIME/bin/python-safe"
+
 say "running import smoke test"
 (
   cd "$PROJECT"
