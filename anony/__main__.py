@@ -174,9 +174,9 @@ async def main() -> None:
     assistant_ready = await _start_assistant()
     await bot.start()
 
-    import anony.plugins
+    from anony import plugins as plugins_package
 
-    plugin_count = len(list(pkgutil.iter_modules(anony.plugins.__path__)))
+    plugin_count = len(list(pkgutil.iter_modules(plugins_package.__path__)))
     log.info("Loaded %d modules; assistant_ready=%s", plugin_count, assistant_ready)
 
     writer = asyncio.create_task(status_writer(assistant_ready))
