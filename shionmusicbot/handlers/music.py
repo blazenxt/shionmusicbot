@@ -133,6 +133,18 @@ async def _reply_or_send(message, text: str, **kwargs):
 
 def _friendly_play_error(exc: Exception) -> str:
     raw = str(exc)
+    if "Voice chat is not active" in raw or (
+        "CHAT_ADMIN_REQUIRED" in raw and "CreateGroupCall" in raw
+    ):
+        return (
+            "⚠️ <b>Voice chat is not active / permission missing</b>\n\n"
+            "Telegram did not allow the assistant to start the voice chat.\n\n"
+            "<b>Fix:</b>\n"
+            "1. Start/open the group voice chat manually, then send "
+            "<code>/play song name</code> or <code>/vplay song name</code>.\n"
+            "2. Or promote the assistant with <b>Manage Voice Chats / Video Chats</b> "
+            "so it can auto-start VC like official music bots."
+        )
     if (
         "CHANNEL_INVALID" in raw
         or "channels.GetChannels" in raw

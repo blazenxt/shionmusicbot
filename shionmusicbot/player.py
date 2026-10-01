@@ -428,12 +428,21 @@ class Player:
                 timeout=60,
             )
         except Exception as exc:
-            if "CHANNEL_INVALID" in str(exc) or "channels.GetChannels" in str(exc):
+            raw = str(exc)
+            if "CHANNEL_INVALID" in raw or "channels.GetChannels" in raw:
                 raise RuntimeError(
                     "Telegram rejected this group as CHANNEL_INVALID for the assistant account. "
-                    "Add/promote the assistant account in this exact group, start VC, and retry. "
-                    "If this is an old/basic private group, convert it to a supergroup "
-                    "or make sure the assistant has opened the group once after being added."
+                    "Public groups are resolved by @username automatically. For private groups, "
+                    "let the bot auto-invite the assistant or add the assistant once manually."
+                ) from exc
+            if "CHAT_ADMIN_REQUIRED" in raw and (
+                "CreateGroupCall" in raw or "phone.CreateGroupCall" in raw
+            ):
+                raise RuntimeError(
+                    "Voice chat is not active, and Telegram did not allow the assistant to "
+                    "start it. Start/open the group voice chat manually, or promote the "
+                    "assistant with Manage Voice Chats / Video Chats permission, then use "
+                    "/play or /vplay again."
                 ) from exc
             raise
         if state.volume != 100:
