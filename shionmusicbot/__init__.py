@@ -2,4 +2,5 @@
 
 __version__ = "1.0.0"
 __author__ = "@blazenxt"
+__maintainer__ = "@zucms"
 __email__ = "m11.galaxy.m581@gmail.com"

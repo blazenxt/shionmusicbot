@@ -8,6 +8,9 @@ license = { text = "MIT" }
 authors = [
   { name = "@blazenxt", email = "m11.galaxy.m581@gmail.com" }
 ]
+maintainers = [
+  { name = "@zucms" }
+]
 
 [tool.ruff]
 line-length = 100

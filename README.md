@@ -2,8 +2,8 @@
 
 Open-source Telegram voice chat music bot for **Shion Music bot**.
 
-Maintainer / author: **@blazenxt**  
-Author email for commits/releases: **m11.galaxy.m581@gmail.com**
+Maintainer: **@zucms**  
+Original author / commit identity: **@blazenxt <m11.galaxy.m581@gmail.com>**
 
 ## Features
 

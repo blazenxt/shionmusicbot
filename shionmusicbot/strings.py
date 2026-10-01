@@ -7,7 +7,7 @@ I stream high-quality music in Telegram group voice chats.
 Add the assistant account to your group, start a voice chat, and use
 <code>/play song name</code> to begin.
 
-<b>Maintainer:</b> @blazenxt
+<b>Maintainer:</b> @zucms
 """.strip()
 
 HELP_TEXT = """
@@ -47,7 +47,7 @@ The assistant user account joins the voice chat and streams audio.
 
 ABOUT_TEXT = """
 <b>Shion Music bot</b>
-Open-source Telegram VC music bot made for @blazenxt.
+Open-source Telegram VC music bot maintained by @zucms.
 
 Tech: Python, Pyrogram, PyTgCalls, yt-dlp, FFmpeg.
 """.strip()
