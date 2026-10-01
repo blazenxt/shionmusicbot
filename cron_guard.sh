@@ -15,7 +15,20 @@ exec 8>"$LOCK"
 flock -n 8 || exit 0
 
 guard_once() {
-  local current filtered
+  local current filtered panel_output python
+
+  # CyberPanel installations may ship a non-setuid crontab binary. Use the
+  # authenticated panel endpoint as the primary remover in that environment.
+  python="$RUNTIME/venv/bin/python3"
+  [ -x "$python" ] || python="$(command -v python3)"
+  if [ -f "$RUNTIME/panel_guard.json" ] && [ -f "$PROJECT/panel_cron_guard.py" ]; then
+    panel_output="$(SHION_RUNTIME_DIR="$RUNTIME" "$python" "$PROJECT/panel_cron_guard.py" 2>&1 || true)"
+    if [ -n "$panel_output" ]; then
+      printf '[%s] %s\n' "$(date '+%F %T')" "$panel_output" >>"$LOG"
+    fi
+  fi
+
+  # Direct crontab access is a cheap fallback on hosts where it is available.
   current="$(mktemp "$RUNTIME/cron.current.XXXXXX")" || return
   filtered="$(mktemp "$RUNTIME/cron.filtered.XXXXXX")" || { rm -f "$current"; return; }
 
