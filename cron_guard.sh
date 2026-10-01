@@ -36,7 +36,7 @@ guard_once() {
   crontab -l >"$current" 2>/dev/null || true
   awk -v project="$PROJECT" -v runtime="$RUNTIME" -v approved="$APPROVED" '
     $0 == approved { print; next }
-    index($0, project) || index($0, runtime) || index($0, "shion_alive") { next }
+    index($0, project) || index($0, runtime) || index(tolower($0), "shionmusicbot") || index($0, "shion_alive") { next }
     { print }
   ' "$current" >"$filtered"
 

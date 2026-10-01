@@ -78,7 +78,13 @@ def main() -> int:
             command = str(item.get("command", ""))
             if command == approved:
                 continue
-            if project in command or str(runtime) in command or "shion_alive" in command.lower():
+            command_lower = command.lower()
+            if (
+                project.lower() in command_lower
+                or str(runtime).lower() in command_lower
+                or "shionmusicbot" in command_lower
+                or "shion_alive" in command_lower
+            ):
                 try:
                     bad.append(int(item["line"]))
                 except (KeyError, TypeError, ValueError):
