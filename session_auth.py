@@ -12,6 +12,9 @@ import asyncio
 import json
 import os
 import re
+import signal
+import socket
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -26,6 +29,10 @@ AUTH_DIR = RUNTIME_DIR / "auth"
 STATE_FILE = AUTH_DIR / "pending.json"
 RATE_FILE = AUTH_DIR / "rate.json"
 SESSION_NAME = "assistant_login"
+SOCKET_FILE = AUTH_DIR / "assistant-auth.sock"
+START_FILE = AUTH_DIR / "daemon-start.json"
+DAEMON_PID_FILE = AUTH_DIR / "daemon.pid"
+DAEMON_SCRIPT = Path(__file__).with_name("session_auth_daemon.py")
 
 
 def reply(ok: bool, **data: Any) -> None:
@@ -88,8 +95,20 @@ def update_env(changes: dict[str, str]) -> None:
     os.replace(tmp, ENV_FILE)
 
 
-def cleanup_pending() -> None:
-    STATE_FILE.unlink(missing_ok=True)
+def cleanup_pending(*, stop_daemon: bool = True, preserve_start: bool = False) -> None:
+    if stop_daemon:
+        try:
+            pid = int(DAEMON_PID_FILE.read_text(encoding="utf-8").strip())
+            if pid > 1:
+                os.kill(pid, signal.SIGTERM)
+                time.sleep(0.25)
+        except (OSError, ValueError):
+            pass
+    paths = [STATE_FILE, SOCKET_FILE, DAEMON_PID_FILE]
+    if not preserve_start:
+        paths.append(START_FILE)
+    for path in paths:
+        path.unlink(missing_ok=True)
     for suffix in (".session", ".session-journal"):
         (AUTH_DIR / f"{SESSION_NAME}{suffix}").unlink(missing_ok=True)
 
@@ -123,6 +142,91 @@ def client(env: dict[str, str]) -> Client:
         device_model="Shion Session Manager",
         app_version="2.0",
     )
+
+
+def friendly_error(exc: BaseException) -> str:
+    messages = {
+        "PhoneNumberInvalid": "The phone number is invalid.",
+        "PhoneNumberBanned": "Telegram has banned this phone number.",
+        "PhoneCodeInvalid": "The Telegram login code is incorrect. Use the newest code.",
+        "PhoneCodeExpired": "The Telegram login code expired. Press Send another code and use only the newest code.",
+        "PasswordHashInvalid": "The two-step verification password is incorrect.",
+        "FloodWait": "Telegram rate-limited this login. Please wait and try again.",
+    }
+    name = type(exc).__name__
+    return messages.get(name, f"Telegram login failed ({name}).")
+
+
+def daemon_request(payload: dict[str, Any]) -> dict[str, Any]:
+    """Send one JSON request to the connected private auth daemon."""
+    try:
+        raw_pid = DAEMON_PID_FILE.read_text(encoding="utf-8").strip()
+        pid = int(raw_pid)
+        os.kill(pid, 0)
+        if not SOCKET_FILE.exists():
+            raise OSError("auth socket missing")
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(90)
+            sock.connect(str(SOCKET_FILE))
+            sock.sendall(json.dumps(payload, separators=(",", ":")).encode() + b"\n")
+            chunks = bytearray()
+            while b"\n" not in chunks and len(chunks) < 65536:
+                part = sock.recv(4096)
+                if not part:
+                    break
+                chunks.extend(part)
+        answer = json.loads(bytes(chunks).split(b"\n", 1)[0].decode("utf-8"))
+        return answer if isinstance(answer, dict) else {"ok": False, "error": "Invalid auth-daemon response."}
+    except (OSError, ValueError, json.JSONDecodeError):
+        cleanup_pending()
+        return {"ok": False, "error": "The secure login process ended. Start again to request a fresh code."}
+
+
+def start_auth_daemon(payload: dict[str, Any]) -> dict[str, Any]:
+    phone = re.sub(r"[\s()-]", "", str(payload.get("phone", "")))
+    if not re.fullmatch(r"\+\d{7,15}", phone):
+        return {"ok": False, "error": "Use international format, for example +919876543210."}
+    allowed, error = rate_limit("send")
+    if not allowed:
+        return {"ok": False, "error": error}
+
+    cleanup_pending()
+    AUTH_DIR.mkdir(parents=True, exist_ok=True)
+    log_handle = (AUTH_DIR / "daemon.log").open("ab")
+    try:
+        process = subprocess.Popen(
+            [sys.executable, str(DAEMON_SCRIPT)],
+            stdin=subprocess.PIPE,
+            stdout=log_handle,
+            stderr=log_handle,
+            start_new_session=True,
+            cwd=str(Path(__file__).resolve().parent),
+            env={**os.environ, "SHION_RUNTIME_DIR": str(RUNTIME_DIR)},
+        )
+        assert process.stdin is not None
+        process.stdin.write(json.dumps({"phone": phone}, separators=(",", ":")).encode())
+        process.stdin.close()
+    except (OSError, AssertionError):
+        log_handle.close()
+        cleanup_pending()
+        return {"ok": False, "error": "Could not start the secure Telegram login process."}
+    finally:
+        try:
+            log_handle.close()
+        except OSError:
+            pass
+
+    deadline = time.monotonic() + 40
+    while time.monotonic() < deadline:
+        data = read_json(START_FILE, None)
+        if isinstance(data, dict):
+            START_FILE.unlink(missing_ok=True)
+            return data
+        if process.poll() is not None:
+            break
+        time.sleep(0.2)
+    cleanup_pending()
+    return {"ok": False, "error": "Telegram did not start the secure login process in time."}
 
 
 async def finalize(app: Client) -> dict[str, Any]:
@@ -270,16 +374,13 @@ async def run(payload: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "error": "Telegram API_ID/API_HASH are not configured on the server."}
     action = str(payload.get("action", "status"))
     if action == "send":
-        return await send_code(payload, env)
-    if action == "resend":
-        return await resend_code(env)
-    if action == "verify":
-        return await verify_code(payload, env)
-    if action == "password":
-        return await verify_password(payload, env)
+        return start_auth_daemon(payload)
+    if action in {"resend", "verify", "password"}:
+        return daemon_request(payload)
     if action == "reset":
+        result = daemon_request(payload) if SOCKET_FILE.exists() else {"ok": True, "step": "phone"}
         cleanup_pending()
-        return {"ok": True, "step": "phone"}
+        return result
     state = read_json(STATE_FILE, {})
     return {"ok": True, "step": state.get("step", "phone")}
 
@@ -292,16 +393,7 @@ def main() -> None:
         result = asyncio.run(run(payload))
         reply(bool(result.pop("ok", False)), **result)
     except Exception as exc:  # Keep web output concise and secret-free.
-        name = type(exc).__name__
-        messages = {
-            "PhoneNumberInvalid": "The phone number is invalid.",
-            "PhoneNumberBanned": "Telegram has banned this phone number.",
-            "PhoneCodeInvalid": "The Telegram login code is incorrect.",
-            "PhoneCodeExpired": "The Telegram login code expired. Request a new code.",
-            "PasswordHashInvalid": "The two-step verification password is incorrect.",
-            "FloodWait": "Telegram rate-limited this login. Please wait and try again.",
-        }
-        reply(False, error=messages.get(name, f"Telegram login failed ({name})."))
+        reply(False, error=friendly_error(exc))
 
 
 if __name__ == "__main__":

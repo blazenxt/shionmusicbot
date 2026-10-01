@@ -59,6 +59,7 @@ ShionMusicBot/
 ├── assistant.php             # read-only assistant/voice status
 ├── assistant-login.php       # one-time phone/OTP/2FA provisioning (then 404)
 ├── session_auth.py           # private-stdin Telegram login bridge
+├── session_auth_daemon.py    # connected one-time auth process (prevents code expiry)
 ├── webstream.php             # dashboard: web audio streamer
 ├── runner.php                # key-protected process control endpoint
 ├── ensure-running.sh         # PID-safe 1-minute cron watchdog
