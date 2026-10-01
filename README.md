@@ -74,7 +74,7 @@ ShionMusicBot/
 
 | Area | Commands |
 |------|----------|
-| Streaming | `/play` `/vplay` `/playforce` `/vplayforce` `/pause` `/resume` `/stop` `/end` `/skip` `/seek <1:30>` `/volume <0-200>` |
+| Streaming | `/play` `/vplay` `/playforce` `/vplayforce` `/live <URL>` `/vlive <URL>` `/pause` `/resume` `/stop` `/end` `/skip` `/seek <1:30>` `/volume <0-200>` |
 | Queue | `/queue` `/queue clear` `/shuffle` `/loop <n\|off>` |
 | Info | `/start` `/help` `/settings` `/lang <en\|hi>` `/ping` `/alive` `/stats` `/id` |
 | Admin | `/auth` `/unauth` `/authusers` |

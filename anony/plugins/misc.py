@@ -63,13 +63,13 @@ KNOWN_COMMANDS = [
     "start", "help", "settings", "id", "lang", "ping", "alive", "stats",
     "auth", "unauth", "authusers", "blacklistchat", "whitelistchat",
     "blacklistedchats", "broadcast", "loop", "pause", "play", "vplay",
-    "playforce", "vplayforce", "queue", "playlist", "resume", "seek",
+    "playforce", "vplayforce", "live", "vlive", "queue", "playlist", "resume", "seek",
     "shuffle", "skip", "stop", "end", "addsudo", "delsudo", "sudolist",
     "restart", "logs", "exec", "volume",
 ]
 GROUP_ONLY_COMMANDS = [
     "auth", "unauth", "authusers", "loop", "pause", "play", "vplay",
-    "playforce", "vplayforce", "queue", "playlist", "resume", "seek",
+    "playforce", "vplayforce", "live", "vlive", "queue", "playlist", "resume", "seek",
     "shuffle", "skip", "stop", "end", "volume",
 ]
 

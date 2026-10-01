@@ -9,18 +9,18 @@ import anony.plugins
 EXPECTED = {
     "start", "ping", "play", "pause", "resume", "stop", "skip", "seek",
     "queue", "loop", "callbacks", "auth", "sudoers", "blacklist",
-    "broadcast", "stats", "misc", "lang", "id", "tools", "volume", "shuffle",
+    "broadcast", "stats", "misc", "lang", "id", "tools", "volume", "shuffle", "live",
 }
 
 
-def test_exactly_22_plugin_modules():
+def test_exactly_23_plugin_modules():
     found = {
         mod.name
         for mod in pkgutil.iter_modules(anony.plugins.__path__)
         if not mod.name.startswith("_")
     }
     assert found == EXPECTED
-    assert len(found) == 22
+    assert len(found) == 23
 
 
 def test_every_plugin_imports():
@@ -40,7 +40,7 @@ def test_private_fallback_does_not_shadow_commands():
     from anony.plugins.misc import GROUP_ONLY_COMMANDS, KNOWN_COMMANDS
 
     assert {"start", "help", "settings", "ping"}.issubset(KNOWN_COMMANDS)
-    assert {"play", "vplay", "queue", "skip"}.issubset(GROUP_ONLY_COMMANDS)
+    assert {"play", "vplay", "live", "vlive", "queue", "skip"}.issubset(GROUP_ONLY_COMMANDS)
     assert set(GROUP_ONLY_COMMANDS).issubset(KNOWN_COMMANDS)
     assert len(KNOWN_COMMANDS) == len(set(KNOWN_COMMANDS))
 

@@ -11,6 +11,8 @@ $commands = array(
         array('/vplay', '<name or link>', 'Stream video into the voice chat', 'Everyone'),
         array('/playforce', '<name or link>', 'Clear queue & play this track now', 'Everyone'),
         array('/vplayforce', '<name or link>', 'Video variant of force play', 'Everyone'),
+        array('/live', '<player page or HLS URL>', 'Play a live link in audio mode', 'Admin / Auth'),
+        array('/vlive', '<player page or HLS URL>', 'Play a live link in video mode', 'Admin / Auth'),
         array('/pause', '', 'Pause the current stream', 'Admin / Auth'),
         array('/resume', '', 'Resume a paused stream', 'Admin / Auth'),
         array('/stop', '', 'Stop playback and clear the queue', 'Admin / Auth'),

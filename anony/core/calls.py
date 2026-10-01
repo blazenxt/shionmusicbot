@@ -79,6 +79,7 @@ class TgCall:
         url: str,
         video: bool = False,
         seek: int = 0,
+        headers: Optional[dict] = None,
     ) -> None:
         """Pipe ``url`` into the voice chat of ``chat_id``.
 
@@ -94,6 +95,7 @@ class TgCall:
             video_flags=(
                 MediaStream.Flags.AUTO_DETECT if video else MediaStream.Flags.IGNORE
             ),
+            headers=headers or None,
             ffmpeg_parameters=f"-ss {int(seek)}" if seek > 0 else None,
         )
         await self.app.play(chat_id, stream, config=GroupCallConfig(auto_start=True))

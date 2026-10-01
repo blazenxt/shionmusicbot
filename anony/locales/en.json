@@ -77,5 +77,10 @@
   "volume_set": "🔊 Volume set to **{vol}%**.",
   "volume_usage": "💡 Usage: /volume <0-200>",
   "queue_shuffled": "🔀 Queue shuffled — {count} tracks.",
-  "force_play": "⚡ Force play — clearing the queue and playing now."
+  "force_play": "⚡ Force play — clearing the queue and playing now.",
+  "live_usage": "💡 Usage: /{command} <live player page or direct HLS URL>",
+  "live_resolving": "📡 Resolving the live stream…",
+  "live_resolve_failed": "❌ Could not resolve this live page: {error}",
+  "live_start_failed": "⚠️ The live stream could not start: {error}",
+  "live_started": "🔴 **LIVE {mode} started**\n\n📺 {title}"
 }
