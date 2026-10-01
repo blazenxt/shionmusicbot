@@ -161,7 +161,8 @@ async def play_handler(client, message):
 
     command = (message.command[0] or "").lower()
     force = command in {"playforce", "fplay"}
-    video = command in {"vplay", "vstream"}
+    stream_mode = await db.get_setting(message.chat.id, "stream_mode", "audio")
+    video = command in {"vplay", "vstream"} or stream_mode == "video"
     status = await message.reply_text(
         "📺 Fast video mode starting..." if video else "⚡ Fast audio mode starting..."
     )
@@ -241,7 +242,7 @@ async def playlist_handler(client, message):
     await status.edit_text(text)
 
 
-@bot.on_message(_cmd(["pause"]) & filters.group)
+@bot.on_message(_cmd(["pause", "ps"]) & filters.group)
 @admin_or_auth
 async def pause_handler(_, message):
     try:
@@ -251,7 +252,7 @@ async def pause_handler(_, message):
     await message.reply_text("⏸ Paused.")
 
 
-@bot.on_message(_cmd(["resume"]) & filters.group)
+@bot.on_message(_cmd(["resume", "rs"]) & filters.group)
 @admin_or_auth
 async def resume_handler(_, message):
     try:
@@ -259,6 +260,26 @@ async def resume_handler(_, message):
     except Exception as exc:
         return await message.reply_text(f"⚠️ <code>{exc}</code>")
     await message.reply_text("▶️ Resumed.")
+
+
+@bot.on_message(_cmd(["mute", "m"]) & filters.group)
+@admin_or_auth
+async def mute_handler(_, message):
+    try:
+        await player.mute(message.chat.id)
+    except Exception as exc:
+        return await message.reply_text(f"⚠️ <code>{exc}</code>")
+    await message.reply_text("🔇 Stream muted.")
+
+
+@bot.on_message(_cmd(["unmute", "um"]) & filters.group)
+@admin_or_auth
+async def unmute_handler(_, message):
+    try:
+        await player.unmute(message.chat.id)
+    except Exception as exc:
+        return await message.reply_text(f"⚠️ <code>{exc}</code>")
+    await message.reply_text("🔊 Stream unmuted.")
 
 
 @bot.on_message(_cmd(["skip", "next"]) & filters.group)
@@ -301,7 +322,12 @@ async def leave_handler(_, message):
     await message.reply_text("👋 Left voice chat.")
 
 
-@bot.on_message(_cmd(["queue", "q"]) & filters.group)
+@bot.on_message(_cmd(["active", "streams"]))
+async def active_handler(_, message):
+    await message.reply_text(player.active_text(), disable_web_page_preview=True)
+
+
+@bot.on_message(_cmd(["queue", "q", "list"]) & filters.group)
 @group_only
 async def queue_handler(_, message):
     text = player.queue_text(message.chat.id)
@@ -349,6 +375,23 @@ async def volume_handler(_, message):
     except Exception as exc:
         return await message.reply_text(f"⚠️ <code>{exc}</code>")
     await message.reply_text(f"🔊 Volume set to <code>{volume}</code>.")
+
+
+@bot.on_message(_cmd(["mode", "switch"]) & filters.group)
+@admin_or_auth
+async def mode_handler(_, message):
+    raw = _args(message).lower().strip()
+    if raw not in {"audio", "video"}:
+        current = await db.get_setting(message.chat.id, "stream_mode", "audio")
+        return await message.reply_text(
+            "<b>Current stream mode:</b> "
+            f"<code>{current}</code>\n\n"
+            "Use <code>/mode audio</code> for normal voice-chat audio or "
+            "<code>/mode video</code> for screen-share video by default. "
+            "You can always use <code>/vplay</code> for one video stream."
+        )
+    await db.set_setting(message.chat.id, "stream_mode", raw)
+    await message.reply_text(f"✅ Default stream mode set to <code>{raw}</code>.")
 
 
 @bot.on_message(_cmd("loop") & filters.group)
@@ -443,12 +486,15 @@ async def dj_handler(_, message):
 @group_only
 async def settings_handler(_, message):
     dj_mode = await db.get_bool_setting(message.chat.id, "dj_mode", CONFIG.default_dj_mode)
+    stream_mode = await db.get_setting(message.chat.id, "stream_mode", "audio")
     state = player.state(message.chat.id)
     await message.reply_text(
         "<b>⚙️ Chat settings</b>\n"
         f"DJ mode: <code>{'on' if dj_mode else 'off'}</code>\n"
+        f"Stream mode: <code>{stream_mode}</code>\n"
         f"Loop: <code>{state.loop}</code>\n"
         f"Volume: <code>{state.volume}</code>\n"
+        f"Muted: <code>{'yes' if state.muted else 'no'}</code>\n"
         f"Queue size: <code>{len(state.queue)}</code>"
     )
 
@@ -466,9 +512,14 @@ async def callback_handler(client, query):
     chat_id = message.chat.id
     user_id = getattr(query.from_user, "id", None)
 
-    if action in {"pause", "resume", "skip", "stop"} and not await is_authorized_user(
-        client, chat_id, user_id
-    ):
+    if action in {
+        "pause",
+        "resume",
+        "mute",
+        "unmute",
+        "skip",
+        "stop",
+    } and not await is_authorized_user(client, chat_id, user_id):
         return await query.answer("Admin/DJ only.", show_alert=True)
 
     try:
@@ -478,6 +529,12 @@ async def callback_handler(client, query):
         elif action == "resume":
             await player.resume(chat_id)
             await query.answer("Resumed")
+        elif action == "mute":
+            await player.mute(chat_id)
+            await query.answer("Muted")
+        elif action == "unmute":
+            await player.unmute(chat_id)
+            await query.answer("Unmuted")
         elif action == "skip":
             await player.skip(chat_id)
             await query.answer("Skipped")

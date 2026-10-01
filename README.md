@@ -12,9 +12,11 @@ Original author / commit identity: **@blazenxt <m11.galaxy.m581@gmail.com>**
 - Direct audio/radio stream URL playback
 - Telegram replied audio/video/document playback
 - Queue, playlist, shuffle, loop, seek, volume
-- Pause, resume, skip, stop, join, leave
+- Audio/video stream mode switching with `/mode` and one-shot `/vplay`
+- Mute, unmute, pause, resume, skip, stop, join, leave
+- Multi-chat queues plus `/active` stream overview
 - Admin/DJ authorization system with SQLite storage
-- Inline control buttons
+- Bot API 9.4 inline control button styles
 - Dockerfile, docker-compose, CI workflow
 
 ## Important Telegram limitation
@@ -99,11 +101,16 @@ docker compose up -d --build
 - `/radio direct-stream-url` — play live radio/direct stream
 - `/queue` — show queue
 - `/now` — show current track
+- `/active` — show active streams across chats
 
 ### Controls
 
-- `/pause`
-- `/resume`
+- `/pause` or `/ps`
+- `/resume` or `/rs`
+- `/mute` or `/m`
+- `/unmute` or `/um`
+- `/mode audio|video` — switch the default stream mode
+- `/vplay query` — force video/screen-share for one request
 - `/skip` or `/skip 3`
 - `/stop` or `/end`
 - `/seek 1:20`

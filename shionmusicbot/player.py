@@ -37,6 +37,7 @@ class QueueState:
     paused: bool = False
     loop: str = LoopMode.OFF
     volume: int = 100
+    muted: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     suppress_end_until: float = 0.0
 
@@ -161,7 +162,7 @@ class Player:
                         state.paused = False
                 await self._cleanup_track(track)
                 try:
-                    await self.calls.leave_call(chat_id)
+                    await self.calls.leave_call(self._chat_target(chat_id))
                 except Exception:
                     pass
                 raise
@@ -267,9 +268,14 @@ class Player:
             raise
         if state.volume != 100:
             try:
-                await self.calls.change_volume_call(chat_id, state.volume)
+                await self.calls.change_volume_call(self._chat_target(chat_id), state.volume)
             except Exception as exc:  # pragma: no cover - depends on Telegram state
                 logger.debug("Volume apply failed: %s", exc)
+        if state.muted:
+            try:
+                await self.calls.mute(self._chat_target(chat_id))
+            except Exception as exc:  # pragma: no cover - depends on Telegram state
+                logger.debug("Mute apply failed: %s", exc)
         await self._send_now_playing(chat_id, track)
 
     async def _send_now_playing(self, chat_id: int, track: Track) -> None:
@@ -298,6 +304,12 @@ class Player:
                 [
                     InlineKeyboardButton("⏸ ᴘᴀᴜsᴇ", callback_data="shion:pause", style="primary"),
                     InlineKeyboardButton("▶ ʀᴇsᴜᴍᴇ", callback_data="shion:resume", style="success"),
+                ],
+                [
+                    InlineKeyboardButton("🔇 ᴍᴜᴛᴇ", callback_data="shion:mute", style="danger"),
+                    InlineKeyboardButton(
+                        "🔊 ᴜɴᴍᴜᴛᴇ", callback_data="shion:unmute", style="success"
+                    ),
                 ],
                 [
                     InlineKeyboardButton("⏭ sᴋɪᴘ", callback_data="shion:skip", style="primary"),
@@ -348,7 +360,7 @@ class Player:
                 await self.on_stream_end(chat_id)
         elif leave:
             try:
-                await self.calls.leave_call(chat_id)
+                await self.calls.leave_call(self._chat_target(chat_id))
             except Exception:
                 pass
             await self.bot.send_message(chat_id, "✅ Queue finished. Voice chat left.")
@@ -357,15 +369,29 @@ class Player:
         state = self.state(chat_id)
         if not state.current:
             raise RuntimeError("Nothing is playing")
-        await self.calls.pause(chat_id)
+        await self.calls.pause(self._chat_target(chat_id))
         state.paused = True
 
     async def resume(self, chat_id: int) -> None:
         state = self.state(chat_id)
         if not state.current:
             raise RuntimeError("Nothing is playing")
-        await self.calls.resume(chat_id)
+        await self.calls.resume(self._chat_target(chat_id))
         state.paused = False
+
+    async def mute(self, chat_id: int) -> None:
+        state = self.state(chat_id)
+        if not state.current:
+            raise RuntimeError("Nothing is playing")
+        await self.calls.mute(self._chat_target(chat_id))
+        state.muted = True
+
+    async def unmute(self, chat_id: int) -> None:
+        state = self.state(chat_id)
+        if not state.current:
+            raise RuntimeError("Nothing is playing")
+        await self.calls.unmute(self._chat_target(chat_id))
+        state.muted = False
 
     async def skip(self, chat_id: int, count: int = 1) -> Track | None:
         state = self.state(chat_id)
@@ -396,7 +422,7 @@ class Player:
             return next_track
 
         try:
-            await self.calls.leave_call(chat_id)
+            await self.calls.leave_call(self._chat_target(chat_id))
         except Exception:
             pass
         return None
@@ -410,8 +436,9 @@ class Player:
             state.queue.clear()
             state.current = None
             state.paused = False
+            state.muted = False
         try:
-            await self.calls.leave_call(chat_id)
+            await self.calls.leave_call(self._chat_target(chat_id))
         except Exception:
             pass
 
@@ -449,7 +476,7 @@ class Player:
             raise RuntimeError("Nothing is playing")
         state.volume = volume
         try:
-            await self.calls.change_volume_call(chat_id, volume)
+            await self.calls.change_volume_call(self._chat_target(chat_id), volume)
         except Exception as exc:  # pragma: no cover - depends on Telegram call state
             logger.exception("Volume change failed in %s", chat_id)
             raise RuntimeError(
@@ -480,11 +507,14 @@ class Player:
         current = state.current
         paused = "Paused" if state.paused else "Playing"
         icon = "📺" if current.video else "🎧"
+        muted = "muted" if state.muted else "unmuted"
         return (
             f"<b>{icon} {paused}</b>\n\n"
             f"{current.line()}\n"
             f"<b>Mode:</b> <code>{'video' if current.video else 'audio'}</code> | "
-            f"<b>Loop:</b> <code>{state.loop}</code> | <b>Volume:</b> <code>{state.volume}</code>"
+            f"<b>Loop:</b> <code>{state.loop}</code> | "
+            f"<b>Volume:</b> <code>{state.volume}</code> | "
+            f"<b>Mute:</b> <code>{muted}</code>"
         )
 
     def queue_text(self, chat_id: int, *, limit: int = 10) -> str:
@@ -503,8 +533,24 @@ class Player:
             if remaining > 0:
                 lines.append(f"…and {remaining} more")
         lines.append(
-            f"\n<b>Loop:</b> <code>{state.loop}</code> | <b>Volume:</b> <code>{state.volume}</code>"
+            f"\n<b>Loop:</b> <code>{state.loop}</code> | "
+            f"<b>Volume:</b> <code>{state.volume}</code> | "
+            f"<b>Mute:</b> <code>{'on' if state.muted else 'off'}</code>"
         )
+        return "\n".join(lines)
+
+    def active_text(self) -> str:
+        active = [(chat_id, state) for chat_id, state in self._states.items() if state.current]
+        if not active:
+            return "No active voice chat streams."
+        lines = ["<b>📡 Active Shion streams</b>"]
+        for index, (chat_id, state) in enumerate(active, start=1):
+            assert state.current is not None
+            mode = "video" if state.current.video else "audio"
+            lines.append(
+                f"{index}. <code>{chat_id}</code> — <b>{state.current.display_title}</b> "
+                f"(<code>{mode}</code>, queue <code>{len(state.queue)}</code>)"
+            )
         return "\n".join(lines)
 
     async def send_queue(self, chat_id: int) -> None:

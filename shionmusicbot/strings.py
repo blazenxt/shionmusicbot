@@ -22,9 +22,12 @@ HELP_TEXT = """
 • <code>/radio stream-url</code> — play a live radio/direct stream
 • <code>/queue</code> — show the queue
 • <code>/now</code> — show the current track
+• <code>/active</code> — show all active Shion streams
 
 <b>Controls</b>
 • <code>/pause</code>, <code>/resume</code>
+• <code>/mute</code>, <code>/unmute</code>
+• <code>/mode audio|video</code> — switch the default stream mode
 • <code>/skip</code> or <code>/skip 3</code>
 • <code>/stop</code> / <code>/end</code>
 • <code>/seek 1:20</code>
