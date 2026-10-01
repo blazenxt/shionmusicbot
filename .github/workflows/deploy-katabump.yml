@@ -1,0 +1,264 @@
+name: Deploy to KataBump
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: katabump-production
+  cancel-in-progress: false
+
+jobs:
+  validate-and-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install CI tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ruff pytest
+
+      - name: Validate code
+        run: |
+          ruff check shionmusicbot tests scripts
+          python -m compileall shionmusicbot scripts tests
+          python -m pytest -q
+
+      - name: Build deployment payload
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          from pathlib import Path
+          import zipfile
+
+          root = Path.cwd()
+          output = root / "shion_payload.zip"
+          excluded_dirs = {
+              ".git",
+              ".github",
+              ".mypy_cache",
+              ".pytest_cache",
+              ".ruff_cache",
+              ".venv",
+              "__pycache__",
+              "downloads",
+              "sessions",
+              "venv",
+          }
+          excluded_suffixes = {".pyc", ".pyo", ".log", ".sqlite3", ".db", ".session"}
+
+          with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+              for path in root.rglob("*"):
+                  rel = path.relative_to(root)
+                  if path.is_dir():
+                      continue
+                  if any(part in excluded_dirs for part in rel.parts):
+                      continue
+                  if path.suffix in excluded_suffixes:
+                      continue
+                  if rel.name == "shion_payload.zip":
+                      continue
+                  archive.write(path, rel.as_posix())
+
+          print(f"Created {output.name} ({output.stat().st_size} bytes)")
+          PY
+
+      - name: Deploy to KataBump
+        env:
+          KATABUMP_PANEL_URL: ${{ secrets.KATABUMP_PANEL_URL }}
+          KATABUMP_API_KEY: ${{ secrets.KATABUMP_API_KEY }}
+          KATABUMP_SERVER_ID: ${{ secrets.KATABUMP_SERVER_ID }}
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          import time
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+          from pathlib import Path
+
+          panel_url = os.environ["KATABUMP_PANEL_URL"].rstrip("/")
+          api_key = os.environ["KATABUMP_API_KEY"]
+          server_id = os.environ["KATABUMP_SERVER_ID"]
+          root = Path.cwd()
+
+          headers_json = {
+              "Authorization": f"Bearer {api_key}",
+              "Accept": "Application/vnd.pterodactyl.v1+json",
+              "Content-Type": "application/json",
+              "User-Agent": "ShionMusicBot-CI/1.0",
+          }
+          headers_text = {
+              "Authorization": f"Bearer {api_key}",
+              "Accept": "Application/vnd.pterodactyl.v1+json",
+              "User-Agent": "ShionMusicBot-CI/1.0",
+          }
+
+          def api(method: str, path: str, data=None, *, headers=None, raw: bool = False, timeout: int = 60):
+              body = None
+              if data is not None:
+                  body = data if raw else json.dumps(data).encode("utf-8")
+              req = urllib.request.Request(
+                  panel_url + path,
+                  data=body,
+                  headers=headers or headers_json,
+                  method=method,
+              )
+              with urllib.request.urlopen(req, timeout=timeout) as response:
+                  payload = response.read()
+                  if not payload:
+                      return None
+                  try:
+                      return json.loads(payload.decode("utf-8"))
+                  except Exception:
+                      return payload.decode("utf-8", errors="replace")
+
+          def server_state() -> str:
+              data = api("GET", f"/api/client/servers/{server_id}/resources")
+              return data["attributes"]["current_state"]
+
+          def power(signal: str) -> None:
+              try:
+                  api("POST", f"/api/client/servers/{server_id}/power", {"signal": signal})
+                  print(f"Power signal sent: {signal}")
+              except urllib.error.HTTPError as exc:
+                  if exc.code not in {400, 409}:
+                      raise
+                  print(f"Power signal {signal} ignored: HTTP {exc.code}")
+
+          def wait_for_state(targets: set[str], timeout: int = 180) -> str:
+              deadline = time.time() + timeout
+              last = None
+              while time.time() < deadline:
+                  try:
+                      current = server_state()
+                  except Exception as exc:
+                      current = f"error:{type(exc).__name__}"
+                  if current != last:
+                      print(f"Server state: {current}")
+                      last = current
+                  if current in targets:
+                      return current
+                  time.sleep(3)
+              raise TimeoutError(f"Timed out waiting for {targets}; last state was {last}")
+
+          def create_folder(parent: str, name: str) -> None:
+              try:
+                  api(
+                      "POST",
+                      f"/api/client/servers/{server_id}/files/create-folder",
+                      {"root": parent, "name": name},
+                  )
+              except urllib.error.HTTPError as exc:
+                  if exc.code not in {400, 409}:
+                      raise
+
+          def ensure_dirs(remote_file: str) -> None:
+              parts = [part for part in remote_file.strip("/").split("/")[:-1] if part]
+              parent = "/"
+              for part in parts:
+                  create_folder(parent, part)
+                  parent = (parent.rstrip("/") + "/" + part) if parent != "/" else "/" + part
+
+          def write_file(remote_file: str, data: bytes, *, binary: bool = False) -> None:
+              ensure_dirs(remote_file)
+              headers = dict(headers_text)
+              headers["Content-Type"] = "application/octet-stream" if binary else "text/plain"
+              api(
+                  "POST",
+                  f"/api/client/servers/{server_id}/files/write?file="
+                  + urllib.parse.quote(remote_file, safe=""),
+                  data,
+                  headers=headers,
+                  raw=True,
+                  timeout=120,
+              )
+              print(f"Uploaded {remote_file}")
+
+          def set_startup_file(value: str) -> None:
+              api(
+                  "PUT",
+                  f"/api/client/servers/{server_id}/startup/variable",
+                  {"key": "BOT_PY_FILE", "value": value},
+              )
+              print(f"BOT_PY_FILE set to {value}")
+
+          def read_text(remote_file: str) -> str:
+              req = urllib.request.Request(
+                  panel_url
+                  + f"/api/client/servers/{server_id}/files/contents?file="
+                  + urllib.parse.quote(remote_file, safe=""),
+                  headers=headers_text,
+              )
+              with urllib.request.urlopen(req, timeout=60) as response:
+                  return response.read().decode("utf-8", errors="replace")
+
+          print(f"Initial server state: {server_state()}")
+          if server_state() != "offline":
+              power("stop")
+              try:
+                  wait_for_state({"offline"}, timeout=180)
+              except TimeoutError:
+                  power("kill")
+                  wait_for_state({"offline"}, timeout=60)
+
+          payload = root / "shion_payload.zip"
+          write_file("/shion_payload.zip", payload.read_bytes(), binary=True)
+
+          sync_paths = [
+              "README.md",
+              "LICENSE",
+              "pyproject.toml",
+              "requirements.txt",
+              "docker-compose.yml",
+              "Dockerfile",
+          ]
+          sync_roots = ["shionmusicbot", "scripts", "assets"]
+          for rel in sync_paths:
+              path = root / rel
+              if path.exists():
+                  data = path.read_bytes()
+                  write_file("/" + rel, data, binary=path.suffix in {".png", ".jpg", ".jpeg"})
+                  write_file("/shion_app/" + rel, data, binary=path.suffix in {".png", ".jpg", ".jpeg"})
+          for folder in sync_roots:
+              base = root / folder
+              if not base.exists():
+                  continue
+              for path in base.rglob("*"):
+                  if not path.is_file() or "__pycache__" in path.parts:
+                      continue
+                  rel = path.relative_to(root).as_posix()
+                  binary = path.suffix.lower() in {".png", ".jpg", ".jpeg", ".zip"}
+                  data = path.read_bytes()
+                  write_file("/" + rel, data, binary=binary)
+                  write_file("/shion_app/" + rel, data, binary=binary)
+
+          set_startup_file("main.py")
+          power("start")
+          wait_for_state({"running", "starting"}, timeout=180)
+          time.sleep(20)
+          log_tail = ""
+          try:
+              log_tail = "\n".join(read_text("/shion_runtime.log").splitlines()[-120:])
+          except Exception as exc:
+              print(f"Could not read runtime log: {type(exc).__name__}")
+          if "AUTH_KEY_DUPLICATED" in log_tail:
+              raise RuntimeError("Deployment started but assistant session hit AUTH_KEY_DUPLICATED")
+          if "Shion Music bot is ready." not in log_tail:
+              print(log_tail)
+              raise RuntimeError("Deployment started but ready marker was not found in runtime log")
+          print("Deployment complete: Shion Music bot is ready.")
+          PY
