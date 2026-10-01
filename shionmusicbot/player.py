@@ -55,12 +55,69 @@ class Player:
         self.database = database
         self.config = config
         self._states: dict[int, QueueState] = {}
+        self._chat_refs: dict[int, int | str] = {}
         self._handlers_registered = False
 
     def state(self, chat_id: int) -> QueueState:
         if chat_id not in self._states:
             self._states[chat_id] = QueueState()
         return self._states[chat_id]
+
+    def remember_chat(self, chat) -> None:
+        """Remember the best assistant-side reference for a Telegram chat.
+
+        PyTgCalls uses the assistant user account, not the bot account, to resolve
+        the voice-chat peer. Public supergroups resolve more reliably by username;
+        private groups still use the numeric id and require the assistant to be a
+        member of the group.
+        """
+        chat_id = getattr(chat, "id", None)
+        if chat_id is None:
+            return
+        username = getattr(chat, "username", None)
+        self._chat_refs[int(chat_id)] = f"@{username}" if username else int(chat_id)
+
+    def _chat_target(self, chat_id: int) -> int | str:
+        return self._chat_refs.get(chat_id, chat_id)
+
+    async def _warm_assistant_peer(self, chat_id: int) -> int | str:
+        target = self._chat_target(chat_id)
+        app = getattr(self.calls, "mtproto_client", None)
+        if app is None:
+            return target
+
+        # 1) If the chat is public, resolving by @username fills the assistant's
+        # peer cache and avoids CHANNEL_INVALID on the numeric -100 id.
+        if isinstance(target, str):
+            try:
+                await app.get_chat(target)
+            except Exception as exc:
+                logger.debug("Assistant could not pre-resolve %s: %s", target, exc)
+
+        # 2) Validate numeric id from the assistant session. If the assistant was
+        # newly added, loading dialogs often refreshes Pyrogram's peer cache.
+        try:
+            await app.resolve_peer(chat_id)
+        except Exception as first_exc:
+            logger.debug("Assistant peer cache miss for %s: %s", chat_id, first_exc)
+            try:
+                async for dialog in app.get_dialogs():
+                    dialog_chat = getattr(dialog, "chat", None)
+                    if getattr(dialog_chat, "id", None) == chat_id:
+                        break
+            except Exception as exc:
+                logger.debug("Assistant dialog refresh failed for %s: %s", chat_id, exc)
+            try:
+                await app.resolve_peer(chat_id)
+            except Exception as exc:
+                raise RuntimeError(
+                    "Assistant cannot access this group/channel. Add the assistant account "
+                    "to this group, keep it as a member, promote it with Manage Video Chats, "
+                    "start the voice chat, then try /play again. For private groups, the "
+                    "assistant must be manually added; public groups can also be resolved "
+                    "by @username."
+                ) from exc
+        return target
 
     def register_call_handlers(self) -> None:
         if self._handlers_registered:
@@ -189,14 +246,25 @@ class Player:
             " [video]" if track.video else "",
         )
         stream = self._build_fast_stream(track)
-        await asyncio.wait_for(
-            self.calls.play(
-                chat_id,
-                stream,
-                GroupCallConfig(auto_start=self.config.auto_start_voice_chat),
-            ),
-            timeout=60,
-        )
+        target = await self._warm_assistant_peer(chat_id)
+        try:
+            await asyncio.wait_for(
+                self.calls.play(
+                    target,
+                    stream,
+                    GroupCallConfig(auto_start=self.config.auto_start_voice_chat),
+                ),
+                timeout=60,
+            )
+        except Exception as exc:
+            if "CHANNEL_INVALID" in str(exc) or "channels.GetChannels" in str(exc):
+                raise RuntimeError(
+                    "Telegram rejected this group as CHANNEL_INVALID for the assistant account. "
+                    "Add/promote the assistant account in this exact group, start VC, and retry. "
+                    "If this is an old/basic private group, convert it to a supergroup "
+                    "or make sure the assistant has opened the group once after being added."
+                ) from exc
+            raise
         if state.volume != 100:
             try:
                 await self.calls.change_volume_call(chat_id, state.volume)
@@ -348,8 +416,9 @@ class Player:
             pass
 
     async def join(self, chat_id: int) -> None:
+        target = await self._warm_assistant_peer(chat_id)
         await self.calls.play(
-            chat_id,
+            target,
             None,
             GroupCallConfig(auto_start=self.config.auto_start_voice_chat),
         )

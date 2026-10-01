@@ -76,6 +76,28 @@ async def _safe_status(status, text: str) -> None:
         pass
 
 
+def _friendly_play_error(exc: Exception) -> str:
+    raw = str(exc)
+    if (
+        "CHANNEL_INVALID" in raw
+        or "channels.GetChannels" in raw
+        or "Assistant cannot access" in raw
+    ):
+        return (
+            "⚠️ <b>Assistant cannot access this group</b>\n\n"
+            "Telegram returned <code>CHANNEL_INVALID</code>, which means the assistant user "
+            "account cannot resolve this group/channel from its own session.\n\n"
+            "<b>Fix checklist:</b>\n"
+            "1. Add the assistant account to this exact group.\n"
+            "2. Promote it as admin with <b>Manage Voice Chats / Video Chats</b>.\n"
+            "3. Start/open the group voice chat.\n"
+            "4. Send <code>/join</code>, then <code>/play song name</code>.\n\n"
+            "If this is an old/basic private group, convert it to a supergroup or make the "
+            "group public temporarily so the assistant can resolve it."
+        )
+    return f"⚠️ <b>Error:</b> <code>{raw}</code>\n\n{VC_JOIN_HINT}"
+
+
 async def _run_play_request(message, status, query: str, *, force: bool, video: bool) -> None:
     try:
         if query:
@@ -104,11 +126,11 @@ async def _run_play_request(message, status, query: str, *, force: bool, video: 
         result = await player.add_track(message.chat.id, track, force=force)
     except Exception as exc:
         logger.exception("Play request failed in %s", getattr(message.chat, "id", "unknown"))
-        text = f"⚠️ <b>Error:</b> <code>{exc}</code>\n\n{VC_JOIN_HINT}"
+        text = _friendly_play_error(exc)
         try:
-            await status.edit_text(text)
+            await status.edit_text(text, disable_web_page_preview=True)
         except Exception:
-            await message.reply_text(text)
+            await message.reply_text(text, disable_web_page_preview=True)
         return
 
     if result.started:
@@ -129,6 +151,7 @@ async def _run_play_request(message, status, query: str, *, force: bool, video: 
 @bot.on_message(_cmd(["play", "p", "playforce", "fplay", "vplay", "vstream"]) & filters.group)
 @group_only
 async def play_handler(client, message):
+    player.remember_chat(message.chat)
     if not await _play_allowed(client, message):
         return await message.reply_text(NEED_ADMIN)
 
@@ -150,6 +173,7 @@ async def play_handler(client, message):
 @bot.on_message(_cmd(["radio", "stream"]) & filters.group)
 @group_only
 async def radio_handler(client, message):
+    player.remember_chat(message.chat)
     if not await _play_allowed(client, message):
         return await message.reply_text(NEED_ADMIN)
     query = _args(message)
@@ -262,10 +286,11 @@ async def stop_handler(_, message):
 @bot.on_message(_cmd(["join", "joinvc"]) & filters.group)
 @admin_or_auth
 async def join_handler(_, message):
+    player.remember_chat(message.chat)
     try:
         await player.join(message.chat.id)
     except Exception as exc:
-        return await message.reply_text(f"⚠️ <code>{exc}</code>\n\n{VC_JOIN_HINT}")
+        return await message.reply_text(_friendly_play_error(exc), disable_web_page_preview=True)
     await message.reply_text("✅ Joined voice chat.")
 
 
