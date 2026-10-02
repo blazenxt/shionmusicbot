@@ -73,6 +73,12 @@ chmod +x "$RUNTIME/bin/ffprobe" 2>/dev/null || true
 # venv command line from terminating the production process.
 cat >"$RUNTIME/bin/python-safe" <<EOF
 #!/usr/bin/env bash
+# LiteSpeed enforces a 1 GiB address-space ceiling. Native WebRTC creates many
+# threads; the default 8 MiB stack reservation per thread exhausts virtual
+# memory long before physical RAM and causes choppy media / AlignedMalloc
+# crashes. Smaller safe stacks plus bounded glibc arenas leave ample headroom.
+ulimit -s 1024 2>/dev/null || true
+export MALLOC_ARENA_MAX=2
 VENV="$VENV"
 for site in "\$VENV"/lib/python*/site-packages; do
   if [ -d "\$site" ]; then

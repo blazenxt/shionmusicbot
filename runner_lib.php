@@ -148,6 +148,7 @@ function sh_start_bot(): bool
     $cmd = 'cd ' . escapeshellarg(__DIR__) . ' || exit 1; '
         . 'export SHION_RUNTIME_DIR=' . escapeshellarg($runtime) . '; '
         . 'export PATH=' . escapeshellarg($runtime . '/bin') . ':$PATH; '
+        . 'export MALLOC_ARENA_MAX=2; ulimit -s 1024 2>/dev/null || true; '
         . 'nohup ' . escapeshellarg($python) . ' -m anony >> '
         . escapeshellarg($runtime . '/bot.log') . ' 2>&1 < /dev/null & '
         . 'echo $! > ' . escapeshellarg($runtime . '/bot.pid');

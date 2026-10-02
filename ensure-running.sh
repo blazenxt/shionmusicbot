@@ -48,6 +48,8 @@ fi
 cd "$PROJECT" || exit 1
 export SHION_RUNTIME_DIR="$RUNTIME"
 export PATH="$RUNTIME/bin:$PATH"
+export MALLOC_ARENA_MAX=2
+ulimit -s 1024 2>/dev/null || true
 nohup "$PY" -m anony >> "$RUNTIME/bot.log" 2>&1 < /dev/null &
 echo $! > "$PIDFILE"
 printf '%s watchdog started pid %s\n' "$(date '+%F %T')" "$!" >> "$RUNTIME/supervisor.log"
