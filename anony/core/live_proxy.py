@@ -67,9 +67,9 @@ def build_live_raw_stream(
     media = MediaStream(
         url,
         audio_parameters=AudioQuality.HIGH,
-        # 360p/20fps keeps raw-pipe traffic and CPU stable on the shared host
-        # while preserving Telegram's high-quality stereo audio profile.
-        video_parameters=VideoParameters(640, 360, 20, adjust_by_height=False),
+        # 360p/25fps matches common broadcast HLS timing while keeping raw-pipe
+        # traffic stable and preserving Telegram's high-quality stereo audio.
+        video_parameters=VideoParameters(640, 360, 25, adjust_by_height=False),
         audio_path=url,
         audio_flags=MediaStream.Flags.AUTO_DETECT,
         video_flags=(MediaStream.Flags.AUTO_DETECT if video else MediaStream.Flags.IGNORE),
@@ -86,15 +86,28 @@ def build_live_raw_stream(
             # Pace reads at the source frame rate. Without this FFmpeg races
             # through the current ~30-second HLS window, reaches its live edge
             # before the playlist refreshes, then drains the pipe and exits.
-            command = command.replace(" -i ", " -re -i ", 1)
+            command = command.replace(
+                " -i ", " -re -thread_queue_size 4096 -i ", 1
+            )
+        else:
+            command = command.replace(" -i ", " -thread_queue_size 4096 -i ", 1)
         # This small host cannot allocate FFmpeg's default frame-thread pool
-        # while the bot, PyTgCalls and both live transcoders are resident.  The
-        # raw-video encoder otherwise exits with EAGAIN after VC join and sends
-        # zero frames.  One encoder/filter thread is sufficient for 360p.
-        thread_options = (
-            "-filter_threads 1 -threads 1 " if output is media.camera else "-threads 1 "
-        )
-        command = command.replace("pipe:1", thread_options + "pipe:1")
+        # while the bot, PyTgCalls and both live transcoders are resident. One
+        # encoder/filter thread prevents EAGAIN. A fixed-rate video filter and
+        # asynchronous audio resampler smooth timestamp gaps/discontinuities
+        # instead of forwarding them as visible freezes or audible crackle.
+        if output is media.camera:
+            command = command.replace(
+                "-vf scale=640:360",
+                "-vf fps=25,scale=640:360:flags=fast_bilinear",
+            )
+            output_options = "-filter_threads 1 -threads 1 "
+        else:
+            output_options = (
+                "-af aresample=48000:async=1000:min_hard_comp=0.100:first_pts=0 "
+                "-threads 1 "
+            )
+        command = command.replace("pipe:1", output_options + "pipe:1")
         output.path = command
     return RawStream(microphone=media.microphone, camera=media.camera)
 

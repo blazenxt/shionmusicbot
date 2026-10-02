@@ -46,21 +46,26 @@ def test_live_raw_stream_removes_vod_reconnect_flags():
     stream = build_live_raw_stream("http://127.0.0.1:12345/live.m3u8", True)
     assert "-reconnect" not in stream.microphone.path
     assert "-reconnect" not in stream.camera.path
-    assert " -re -i " in stream.microphone.path
-    assert " -re -i " in stream.camera.path
+    assert " -re -thread_queue_size 4096 -i " in stream.microphone.path
+    assert " -re -thread_queue_size 4096 -i " in stream.camera.path
     assert "-f s16le" in stream.microphone.path
+    assert "-thread_queue_size 4096" in stream.microphone.path
+    assert "aresample=48000:async=1000" in stream.microphone.path
     assert "-threads 1" in stream.microphone.path
     assert "-f rawvideo" in stream.camera.path
+    assert "fps=25,scale=640:360:flags=fast_bilinear" in stream.camera.path
     assert "-filter_threads 1 -threads 1" in stream.camera.path
 
 
-def test_normal_raw_stream_keeps_http_recovery_and_uses_20fps():
+def test_normal_raw_stream_keeps_http_recovery_and_uses_smoothing_filters():
     stream = build_live_raw_stream(
         "https://media.example.com/video.mp4", True, strip_reconnect=False
     )
     assert "-reconnect_at_eof 1" in stream.microphone.path
     assert "-reconnect_at_eof 1" in stream.camera.path
-    assert "-r 20" in stream.camera.path
+    assert "-thread_queue_size 4096" in stream.camera.path
+    assert "aresample=48000:async=1000" in stream.microphone.path
+    assert "-r 25" in stream.camera.path
 
 
 def test_hls_master_keeps_only_best_rendition_up_to_360p():
