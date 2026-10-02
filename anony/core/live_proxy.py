@@ -74,6 +74,14 @@ def build_live_raw_stream(url: str, video: bool, seek: int = 0) -> RawStream:
         command = output.path
         for option in _RECONNECT_OPTIONS:
             command = command.replace(option, "")
+        # This small host cannot allocate FFmpeg's default frame-thread pool
+        # while the bot, PyTgCalls and both live transcoders are resident.  The
+        # raw-video encoder otherwise exits with EAGAIN after VC join and sends
+        # zero frames.  One encoder/filter thread is sufficient for 360p.
+        thread_options = (
+            "-filter_threads 1 -threads 1 " if output is media.camera else "-threads 1 "
+        )
+        command = command.replace("pipe:1", thread_options + "pipe:1")
         output.path = command
     return RawStream(microphone=media.microphone, camera=media.camera)
 

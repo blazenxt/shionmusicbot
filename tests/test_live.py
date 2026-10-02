@@ -43,7 +43,9 @@ def test_live_raw_stream_removes_vod_reconnect_flags():
     assert "-reconnect" not in stream.microphone.path
     assert "-reconnect" not in stream.camera.path
     assert "-f s16le" in stream.microphone.path
+    assert "-threads 1" in stream.microphone.path
     assert "-f rawvideo" in stream.camera.path
+    assert "-filter_threads 1 -threads 1" in stream.camera.path
 
 
 def test_hls_proxy_rejects_unsafe_proxy_endpoints():
