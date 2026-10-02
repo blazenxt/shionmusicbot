@@ -19,10 +19,9 @@ from typing import Awaitable, Callable, List, Optional
 from pytgcalls import PyTgCalls
 from pytgcalls import filters as call_filters
 from pytgcalls.types import GroupCallConfig, MediaStream, StreamEnded
-from pytgcalls.types.raw import Stream as RawStream
 from pytgcalls.types.stream import AudioQuality, VideoQuality
 
-from anony.core.live_proxy import live_hls_proxy
+from anony.core.live_proxy import build_live_raw_stream, live_hls_proxy
 
 log = logging.getLogger(__name__)
 
@@ -107,23 +106,20 @@ class TgCall:
             stream_url, new_token = await live_hls_proxy.register(url, headers)
             stream_headers = None
 
-        media = MediaStream(
-            stream_url,
-            audio_parameters=AudioQuality.HIGH,
-            video_parameters=VideoQuality.SD_360p,
-            audio_path=stream_url if new_token else None,
-            audio_flags=MediaStream.Flags.AUTO_DETECT,
-            video_flags=(
-                MediaStream.Flags.AUTO_DETECT if video else MediaStream.Flags.IGNORE
-            ),
-            headers=stream_headers,
-            ffmpeg_parameters=f"-ss {int(seek)}" if seek > 0 else None,
-        )
-        stream = (
-            RawStream(microphone=media.microphone, camera=media.camera)
-            if new_token
-            else media
-        )
+        if new_token:
+            stream = build_live_raw_stream(stream_url, video, seek)
+        else:
+            stream = MediaStream(
+                stream_url,
+                audio_parameters=AudioQuality.HIGH,
+                video_parameters=VideoQuality.SD_360p,
+                audio_flags=MediaStream.Flags.AUTO_DETECT,
+                video_flags=(
+                    MediaStream.Flags.AUTO_DETECT if video else MediaStream.Flags.IGNORE
+                ),
+                headers=stream_headers,
+                ffmpeg_parameters=f"-ss {int(seek)}" if seek > 0 else None,
+            )
         try:
             await self.app.play(chat_id, stream, config=GroupCallConfig(auto_start=True))
         except Exception:

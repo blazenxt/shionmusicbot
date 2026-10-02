@@ -5,7 +5,7 @@ import urllib.parse
 import pytest
 
 from anony.core.live import LiveResolveError, _parse_m3u, _validate_public_url
-from anony.core.live_proxy import LiveHLSProxy
+from anony.core.live_proxy import LiveHLSProxy, build_live_raw_stream
 from anony.helpers._inline import DANGER, PRIMARY, SUCCESS, stream_controls
 
 
@@ -36,6 +36,21 @@ def test_parse_m3u_rejects_other_channel():
 async def test_live_url_ssrf_guard_rejects_loopback():
     with pytest.raises(LiveResolveError):
         await _validate_public_url("http://127.0.0.1/private.m3u8")
+
+
+def test_live_raw_stream_removes_vod_reconnect_flags():
+    stream = build_live_raw_stream("http://127.0.0.1:12345/live.m3u8", True)
+    assert "-reconnect" not in stream.microphone.path
+    assert "-reconnect" not in stream.camera.path
+    assert "-f s16le" in stream.microphone.path
+    assert "-f rawvideo" in stream.camera.path
+
+
+def test_hls_proxy_rejects_unsafe_proxy_endpoints():
+    assert LiveHLSProxy._is_public_proxy("http://8.8.8.8:8080") is True
+    assert LiveHLSProxy._is_public_proxy("http://127.0.0.1:8080") is False
+    assert LiveHLSProxy._is_public_proxy("http://10.0.0.2:3128") is False
+    assert LiveHLSProxy._is_public_proxy("https://8.8.8.8:8080") is False
 
 
 def test_hls_proxy_rewrites_relative_segments_and_uri_attributes():
