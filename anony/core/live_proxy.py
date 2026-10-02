@@ -25,7 +25,8 @@ import aiohttp
 from aiohttp import web
 from pytgcalls.types import MediaStream
 from pytgcalls.types.raw import Stream as RawStream
-from pytgcalls.types.stream import AudioQuality, VideoQuality
+from pytgcalls.types.raw import VideoParameters
+from pytgcalls.types.stream import AudioQuality
 
 from anony.core.live import LiveResolveError, _validate_public_url
 
@@ -41,6 +42,8 @@ _PROXY_LIST_URL = (
 )
 _BLOCKED_STATUSES = {403, 407, 429, 451, 502, 503, 504}
 _URI_ATTRIBUTE = re.compile(r'URI="([^"]+)"')
+_RESOLUTION = re.compile(r"(?:^|,)RESOLUTION=(\d+)x(\d+)(?:,|$)", re.I)
+_BANDWIDTH = re.compile(r"(?:AVERAGE-)?BANDWIDTH=(\d+)", re.I)
 _RECONNECT_OPTIONS = (
     "-reconnect 1 ",
     "-reconnect_at_eof 1 ",
@@ -49,19 +52,24 @@ _RECONNECT_OPTIONS = (
 )
 
 
-def build_live_raw_stream(url: str, video: bool, seek: int = 0) -> RawStream:
-    """Build a live raw stream without PyTgCalls' VOD reconnect flags.
+def build_live_raw_stream(
+    url: str, video: bool, seek: int = 0, *, strip_reconnect: bool = True
+) -> RawStream:
+    """Build a low-memory raw stream, optionally removing VOD reconnect flags.
 
-    ``MediaStream`` adds ``-reconnect_at_eof`` to every HTTP input before it
-    knows the input is live.  Against a loopback HLS manifest that makes
-    FFmpeg reconnect to the completed master response forever, so it never
-    advances to media segments and Telegram receives silence.  The raw stream
-    intentionally skips ffprobe and removes only those VOD reconnect options.
+    Returning a raw stream skips PyTgCalls' fragile second ffprobe pass and
+    lets us constrain FFmpeg's encoder threads on this memory-limited host.
+    For loopback live HLS, ``strip_reconnect`` also removes the VOD-only
+    reconnect options which would repeatedly reopen the completed master
+    response instead of advancing to media segments.  Normal files keep those
+    options so transient HTTP failures can still recover.
     """
     media = MediaStream(
         url,
         audio_parameters=AudioQuality.HIGH,
-        video_parameters=VideoQuality.SD_360p,
+        # 360p/20fps keeps raw-pipe traffic and CPU stable on the shared host
+        # while preserving Telegram's high-quality stereo audio profile.
+        video_parameters=VideoParameters(640, 360, 20, adjust_by_height=False),
         audio_path=url,
         audio_flags=MediaStream.Flags.AUTO_DETECT,
         video_flags=(MediaStream.Flags.AUTO_DETECT if video else MediaStream.Flags.IGNORE),
@@ -72,8 +80,13 @@ def build_live_raw_stream(url: str, video: bool, seek: int = 0) -> RawStream:
         if output is None or not getattr(output, "path", None):
             continue
         command = output.path
-        for option in _RECONNECT_OPTIONS:
-            command = command.replace(option, "")
+        if strip_reconnect:
+            for option in _RECONNECT_OPTIONS:
+                command = command.replace(option, "")
+            # Pace reads at the source frame rate. Without this FFmpeg races
+            # through the current ~30-second HLS window, reaches its live edge
+            # before the playlist refreshes, then drains the pipe and exits.
+            command = command.replace(" -i ", " -re -i ", 1)
         # This small host cannot allocate FFmpeg's default frame-thread pool
         # while the bot, PyTgCalls and both live transcoders are resident.  The
         # raw-video encoder otherwise exits with EAGAIN after VC join and sends
@@ -86,6 +99,49 @@ def build_live_raw_stream(url: str, video: bool, seek: int = 0) -> RawStream:
     return RawStream(microphone=media.microphone, camera=media.camera)
 
 
+def _select_smooth_variant(text: str, max_width: int = 640, max_height: int = 360) -> str:
+    """Keep one efficient rendition in an HLS master playlist.
+
+    FFmpeg otherwise picks the 1080p/4K rendition and decodes it twice (once
+    for audio and once for video) merely to emit a 360p Telegram camera.  On a
+    shared host that creates avoidable CPU/network spikes and visible stutter.
+    Media playlists contain no ``EXT-X-STREAM-INF`` and pass through unchanged.
+    """
+    lines = text.splitlines()
+    variants: list[tuple[int, int, int, int, int]] = []
+    for info_index, line in enumerate(lines):
+        if not line.strip().upper().startswith("#EXT-X-STREAM-INF:"):
+            continue
+        uri_index = info_index + 1
+        while uri_index < len(lines) and not lines[uri_index].strip():
+            uri_index += 1
+        if uri_index >= len(lines) or lines[uri_index].lstrip().startswith("#"):
+            continue
+        resolution = _RESOLUTION.search(line)
+        bandwidth = _BANDWIDTH.search(line)
+        width, height = (
+            (int(resolution.group(1)), int(resolution.group(2)))
+            if resolution
+            else (0, 0)
+        )
+        variants.append(
+            (info_index, uri_index, width, height, int(bandwidth.group(1)) if bandwidth else 0)
+        )
+    if len(variants) <= 1:
+        return text
+
+    suitable = [v for v in variants if v[2] <= max_width and v[3] <= max_height]
+    if suitable:
+        chosen = max(suitable, key=lambda v: (v[2] * v[3], v[4]))
+    else:
+        chosen = min(variants, key=lambda v: ((v[2] or 10_000) * (v[3] or 10_000), v[4]))
+    drop: set[int] = set()
+    for variant in variants:
+        if variant != chosen:
+            drop.update((variant[0], variant[1]))
+    return "\n".join(line for index, line in enumerate(lines) if index not in drop) + "\n"
+
+
 @dataclass
 class _RelaySource:
     headers: Dict[str, str]
@@ -93,6 +149,7 @@ class _RelaySource:
     proxies: list[str] = field(default_factory=list)
     proxy_index: int = 0
     playlist_logged: bool = False
+    variant_logged: bool = False
     media_logged: bool = False
 
     @property
@@ -429,7 +486,11 @@ class LiveHLSProxy:
                 if not source.playlist_logged:
                     source.playlist_logged = True
                     log.info("FFmpeg opened the verified HLS playlist through the loopback relay")
-                rewritten = self._rewrite_playlist(text, final_url, token)
+                selected = _select_smooth_variant(text)
+                if selected != text and not source.variant_logged:
+                    source.variant_logged = True
+                    log.info("HLS master constrained to a smooth 360p-or-lower rendition")
+                rewritten = self._rewrite_playlist(selected, final_url, token)
                 return web.Response(
                     text=rewritten,
                     status=response.status,

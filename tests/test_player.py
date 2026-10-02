@@ -1,5 +1,7 @@
 """Queue-engine (player) logic tests with fakes."""
 
+import time
+
 import pytest
 
 import anony
@@ -29,7 +31,7 @@ class FakeCall:
         self.stopped = []
 
     async def play(self, chat_id, url, video=False, seek=0):
-        self.played.append((chat_id, url, video))
+        self.played.append((chat_id, url, video, seek))
 
     async def stop(self, chat_id):
         self.stopped.append(chat_id)
@@ -94,9 +96,17 @@ def make_track(title, video=False):
 
 @pytest.fixture(autouse=True)
 def clean_queue():
+    from anony.helpers import _player
+
     queue.clear_all(-1001)
+    _player._started_at.clear()
+    _player._recovery_attempts.clear()
+    _player._advancing.clear()
     yield
     queue.clear_all(-1001)
+    _player._started_at.clear()
+    _player._recovery_attempts.clear()
+    _player._advancing.clear()
 
 
 async def test_advance_replays_when_looping(patched):
@@ -143,7 +153,7 @@ async def test_advance_skips_failing_tracks(patched):
     _cancel_idle(-1001)
 
 
-async def test_advance_empty_schedules_idle_leave(patched):
+async def test_advance_empty_keeps_call_when_auto_end_disabled(patched):
     fake_db, fake_call, _player = patched
     queue.setnow(-1001, None)
     _player._advancing[-1001] = 0
@@ -151,9 +161,9 @@ async def test_advance_empty_schedules_idle_leave(patched):
     await advance(-1001)
 
     assert queue.getnow(-1001) is None
-    # leaving is deferred (idle grace), so a task must be scheduled,
-    # and the call must NOT have been stopped synchronously
-    assert -1001 in _player._idle_tasks
+    # AUTO_END is false in the test/default config: the assistant remains in
+    # the voice chat and no hidden two-minute leave task is created.
+    assert -1001 not in _player._idle_tasks
     assert fake_call.stopped == []
     assert fake_db.loops.get(-1001, 0) == 0
     _cancel_idle(-1001)
@@ -168,4 +178,19 @@ async def test_stream_end_debounce(patched):
     await on_stream_end(-1001)   # video end → debounced
 
     assert len(fake_call.played) == 1
+    _cancel_idle(-1001)
+
+
+async def test_premature_stream_end_resumes_instead_of_dropping_call(patched):
+    fake_db, fake_call, _player = patched
+    current = make_track("current")
+    queue.setnow(-1001, current)
+    _player._started_at[-1001] = time.monotonic() - 30
+
+    await on_stream_end(-1001)
+
+    assert len(fake_call.played) == 1
+    assert fake_call.played[0][3] >= 27
+    assert queue.getnow(-1001) is current
+    assert _player._recovery_attempts[-1001] == 1
     _cancel_idle(-1001)

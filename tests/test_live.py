@@ -5,7 +5,11 @@ import urllib.parse
 import pytest
 
 from anony.core.live import LiveResolveError, _parse_m3u, _validate_public_url
-from anony.core.live_proxy import LiveHLSProxy, build_live_raw_stream
+from anony.core.live_proxy import (
+    LiveHLSProxy,
+    _select_smooth_variant,
+    build_live_raw_stream,
+)
 from anony.helpers._inline import DANGER, PRIMARY, SUCCESS, stream_controls
 
 
@@ -42,10 +46,36 @@ def test_live_raw_stream_removes_vod_reconnect_flags():
     stream = build_live_raw_stream("http://127.0.0.1:12345/live.m3u8", True)
     assert "-reconnect" not in stream.microphone.path
     assert "-reconnect" not in stream.camera.path
+    assert " -re -i " in stream.microphone.path
+    assert " -re -i " in stream.camera.path
     assert "-f s16le" in stream.microphone.path
     assert "-threads 1" in stream.microphone.path
     assert "-f rawvideo" in stream.camera.path
     assert "-filter_threads 1 -threads 1" in stream.camera.path
+
+
+def test_normal_raw_stream_keeps_http_recovery_and_uses_20fps():
+    stream = build_live_raw_stream(
+        "https://media.example.com/video.mp4", True, strip_reconnect=False
+    )
+    assert "-reconnect_at_eof 1" in stream.microphone.path
+    assert "-reconnect_at_eof 1" in stream.camera.path
+    assert "-r 20" in stream.camera.path
+
+
+def test_hls_master_keeps_only_best_rendition_up_to_360p():
+    master = """#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=200000,RESOLUTION=256x144
+low.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=900000,RESOLUTION=640x360
+smooth.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=4500000,RESOLUTION=1920x1080
+heavy.m3u8
+"""
+    selected = _select_smooth_variant(master)
+    assert "smooth.m3u8" in selected
+    assert "low.m3u8" not in selected
+    assert "heavy.m3u8" not in selected
 
 
 def test_hls_proxy_rejects_unsafe_proxy_endpoints():

@@ -75,7 +75,7 @@
   "bl_usage": "💡 Usage: /blacklistchat <chat_id> — or run it inside the target group.",
   "broadcast_usage": "💡 Reply to the message you want to broadcast, then run /broadcast.",
   "volume_set": "🔊 Volume set to **{vol}%**.",
-  "volume_usage": "💡 Usage: /volume <0-200>",
+  "volume_usage": "💡 Usage: /volume <0-100> (higher values cause audio clipping)",
   "queue_shuffled": "🔀 Queue shuffled — {count} tracks.",
   "force_play": "⚡ Force play — clearing the queue and playing now.",
   "live_usage": "💡 Usage: /{command} <live player page or direct HLS URL>",

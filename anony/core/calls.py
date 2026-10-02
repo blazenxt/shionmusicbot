@@ -13,13 +13,13 @@ small, chat-oriented API used by the player and plugins:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Awaitable, Callable, List, Optional
 
 from pytgcalls import PyTgCalls
 from pytgcalls import filters as call_filters
-from pytgcalls.types import GroupCallConfig, MediaStream, StreamEnded
-from pytgcalls.types.stream import AudioQuality, VideoQuality
+from pytgcalls.types import GroupCallConfig, StreamEnded
 
 from anony.core.live_proxy import build_live_raw_stream, live_hls_proxy
 
@@ -39,6 +39,9 @@ class TgCall:
         self._started = False
         self._on_stream_end: Optional[StreamEndCallback] = None
         self._live_proxy_tokens: dict[int, str] = {}
+        self._live_sources: dict[int, tuple[str, bool, dict]] = {}
+        self._live_recovering: set[int] = set()
+        self._live_recovered_at: dict[int, float] = {}
 
         # Register the stream-end dispatcher (PyTgCalls v3 update system).
         self.app.on_update(call_filters.stream_end())(self._dispatch_stream_end)
@@ -70,13 +73,39 @@ class TgCall:
         self._on_stream_end = callback
 
     async def _dispatch_stream_end(self, _client, update: StreamEnded) -> None:
-        log.info("Stream ended in chat %s (type=%s).", update.chat_id, update.stream_type)
+        chat_id = update.chat_id
+        log.info("Stream ended in chat %s (type=%s).", chat_id, update.stream_type)
+        # A live channel has no natural EOF. Refresh its protected URL/relay
+        # automatically instead of advancing an empty queue and going silent.
+        source = self._live_sources.get(chat_id)
+        if source is not None:
+            now = asyncio.get_running_loop().time()
+            if (
+                chat_id in self._live_recovering
+                or now - self._live_recovered_at.get(chat_id, 0.0) < 5
+            ):
+                return
+            self._live_recovering.add(chat_id)
+            try:
+                await asyncio.sleep(1)
+                # /stop removes _live_sources before leave_call, preventing an
+                # intentional stop from racing this recovery path.
+                if self._live_sources.get(chat_id) == source:
+                    url, video, headers = source
+                    log.warning("Recovering interrupted live stream in chat %s.", chat_id)
+                    await self.play(chat_id, url, video=video, headers=headers)
+                    self._live_recovered_at[chat_id] = asyncio.get_running_loop().time()
+                    return
+            except Exception:  # noqa: BLE001 - fall through to queue handling
+                log.exception("Live stream recovery failed in chat %s", chat_id)
+            finally:
+                self._live_recovering.discard(chat_id)
         if self._on_stream_end is None:
             return
         try:
-            await self._on_stream_end(update.chat_id)
+            await self._on_stream_end(chat_id)
         except Exception:  # noqa: BLE001 - player errors must not kill updates
-            log.exception("Stream-end handler failed for chat %s", update.chat_id)
+            log.exception("Stream-end handler failed for chat %s", chat_id)
 
     # ── playback control ───────────────────────────────────────────
     async def play(
@@ -96,7 +125,6 @@ class TgCall:
         previous_token = self._live_proxy_tokens.get(chat_id)
         new_token: Optional[str] = None
         stream_url = url
-        stream_headers = headers or None
         if headers:
             # Keep protected CDN requests out of static FFmpeg's TLS stack.
             # The loopback relay applies the browser headers and recursively
@@ -104,22 +132,18 @@ class TgCall:
             # raw Stream intentionally skips ffprobe (some valid live CDNs
             # make static ffprobe crash before it can return metadata).
             stream_url, new_token = await live_hls_proxy.register(url, headers)
-            stream_headers = None
 
-        if new_token:
-            stream = build_live_raw_stream(stream_url, video, seek)
-        else:
-            stream = MediaStream(
-                stream_url,
-                audio_parameters=AudioQuality.HIGH,
-                video_parameters=VideoQuality.SD_360p,
-                audio_flags=MediaStream.Flags.AUTO_DETECT,
-                video_flags=(
-                    MediaStream.Flags.AUTO_DETECT if video else MediaStream.Flags.IGNORE
-                ),
-                headers=stream_headers,
-                ffmpeg_parameters=f"-ss {int(seek)}" if seek > 0 else None,
-            )
+        # Always hand NTgCalls a raw command.  PyTgCalls' additional ffprobe
+        # pass is unnecessary for our known 16-bit PCM/raw-video outputs and
+        # has been unreliable with both short-lived Testweb3 tokens and this
+        # host's tight memory limit.  Only live loopback HLS drops reconnect
+        # flags; normal files/URLs retain them for transient HTTP recovery.
+        stream = build_live_raw_stream(
+            stream_url,
+            video,
+            seek,
+            strip_reconnect=bool(new_token),
+        )
         try:
             await self.app.play(chat_id, stream, config=GroupCallConfig(auto_start=True))
         except Exception:
@@ -127,8 +151,10 @@ class TgCall:
             raise
         if new_token:
             self._live_proxy_tokens[chat_id] = new_token
+            self._live_sources[chat_id] = (url, video, dict(headers or {}))
         else:
             self._live_proxy_tokens.pop(chat_id, None)
+            self._live_sources.pop(chat_id, None)
         live_hls_proxy.unregister(previous_token)
 
     async def pause(self, chat_id: int) -> None:
@@ -139,6 +165,9 @@ class TgCall:
 
     async def stop(self, chat_id: int) -> None:
         """Leave the group call in ``chat_id`` (ignores 'not in call')."""
+        self._live_sources.pop(chat_id, None)
+        self._live_recovering.discard(chat_id)
+        self._live_recovered_at.pop(chat_id, None)
         try:
             await self.app.leave_call(chat_id)
         except Exception as exc:  # noqa: BLE001 - NotInCallError etc.

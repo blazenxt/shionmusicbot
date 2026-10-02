@@ -1,4 +1,4 @@
-"""``/volume`` — change the stream volume (0-200)."""
+"""``/volume`` — change the stream volume without clipping (0-100)."""
 
 from __future__ import annotations
 
@@ -18,7 +18,10 @@ async def volume_command(client, message):
     chat_id = message.chat.id
     args = (message.text or "").split()[1:]
 
-    if not args or not args[0].isdigit() or not 0 <= int(args[0]) <= 200:
+    # Values above 100 amplify already-normalised PCM and audibly clip on
+    # Telegram (the reported "kat-kat" distortion). Keep the public control
+    # in the clean, lossless range.
+    if not args or not args[0].isdigit() or not 0 <= int(args[0]) <= 100:
         return await message.reply_text(await lang.t(chat_id, "volume_usage"))
 
     volume = int(args[0])

@@ -26,12 +26,21 @@ log = logging.getLogger(__name__)
 # stream-end events emitted for one finished track
 _advancing: Dict[int, float] = {}
 _idle_tasks: Dict[int, asyncio.Task] = {}
+_started_at: Dict[int, float] = {}
+_recovery_attempts: Dict[int, int] = {}
 
 _DEBOUNCE = 4.0
-IDLE_GRACE = 120  # seconds to idle in the voice chat before leaving
+_PREMATURE_MARGIN = 15
+_MAX_RECOVERY_ATTEMPTS = 3
 
 
-async def start_stream(chat_id: int, track, announce: bool = True) -> None:
+async def start_stream(
+    chat_id: int,
+    track,
+    announce: bool = True,
+    seek: int = 0,
+    recovering: bool = False,
+) -> None:
     """Begin (or seamlessly switch to) ``track`` in ``chat_id``."""
     from anony import bot, call, db, lang
     from anony.helpers._inline import stream_controls
@@ -58,15 +67,18 @@ async def start_stream(chat_id: int, track, announce: bool = True) -> None:
     # stream the stable local file.
     try:
         path = await _download(url, track)
-        await call.play(chat_id, path, video=track.is_video)
+        await call.play(chat_id, path, video=track.is_video, seek=seek)
     except Exception as local_exc:  # noqa: BLE001 - last-resort direct pipe
         log.warning("Local stream preparation failed (%s); trying direct piping…", local_exc)
         info = await youtube.refresh_stream(track.media.video_id)
         direct_url = (info or {}).get("stream_url") or url
-        await call.play(chat_id, direct_url, video=track.is_video)
+        await call.play(chat_id, direct_url, video=track.is_video, seek=seek)
 
     queue.setnow(chat_id, track)
-    await db.incr_counter("plays")
+    _started_at[chat_id] = time.monotonic() - max(0, int(seek))
+    if not recovering:
+        _recovery_attempts[chat_id] = 0
+        await db.incr_counter("plays")
     _cancel_idle(chat_id)
 
     if announce:
@@ -145,11 +157,43 @@ async def _download(url: str, track) -> str:
 
 
 async def on_stream_end(chat_id: int) -> None:
-    """PyTgCalls stream-end hook with loop support and queue advance."""
+    """Recover premature EOFs, then honour loop/queue on a natural end."""
     now = time.monotonic()
     if now - _advancing.get(chat_id, 0.0) < _DEBOUNCE:
         return  # second (video) end event of the same track
     _advancing[chat_id] = now
+
+    current = queue.getnow(chat_id)
+    started = _started_at.get(chat_id)
+    duration = int(getattr(getattr(current, "media", None), "duration", 0) or 0)
+    if current is not None and started is not None and duration > 0:
+        elapsed = max(0, int(now - started))
+        attempts = _recovery_attempts.get(chat_id, 0)
+        if duration - elapsed > _PREMATURE_MARGIN and attempts < _MAX_RECOVERY_ATTEMPTS:
+            _recovery_attempts[chat_id] = attempts + 1
+            resume_at = max(0, elapsed - 2)
+            log.warning(
+                "Premature stream end in %s at %ss/%ss; recovering from %ss "
+                "(attempt %s/%s).",
+                chat_id,
+                elapsed,
+                duration,
+                resume_at,
+                attempts + 1,
+                _MAX_RECOVERY_ATTEMPTS,
+            )
+            try:
+                await start_stream(
+                    chat_id,
+                    current,
+                    announce=False,
+                    seek=resume_at,
+                    recovering=True,
+                )
+                return
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Premature stream recovery failed in %s: %s", chat_id, exc)
+
     await advance(chat_id)
 
 
@@ -183,6 +227,8 @@ async def advance(chat_id: int, ignore_loop: bool = False) -> None:
 
     # nothing left to play
     queue.setnow(chat_id, None)
+    _started_at.pop(chat_id, None)
+    _recovery_attempts.pop(chat_id, None)
     await db.set_loop(chat_id, 0)
     _schedule_idle_leave(chat_id)
 
@@ -195,16 +241,22 @@ def _cancel_idle(chat_id: int) -> None:
 
 def _schedule_idle_leave(chat_id: int) -> None:
     _cancel_idle(chat_id)
+    # AUTO_END=false means exactly that: remain in the voice chat after the
+    # queue drains.  The previous hard-coded two-minute fallback contradicted
+    # the setting and made the assistant appear to disconnect on its own.
+    if not config.AUTO_END:
+        log.info("Voice chat idle in %s — auto-leave is disabled.", chat_id)
+        return
 
     async def _leave() -> None:
         try:
-            await asyncio.sleep(3 if config.AUTO_END else IDLE_GRACE)
+            await asyncio.sleep(3)
         except asyncio.CancelledError:
             return
         if queue.getnow(chat_id) is None:
             from anony import call
 
-            log.info("Voice chat idle in %s — leaving.", chat_id)
+            log.info("Voice chat idle in %s — leaving (AUTO_END enabled).", chat_id)
             await call.stop(chat_id)
 
     _idle_tasks[chat_id] = asyncio.create_task(_leave())
@@ -215,6 +267,8 @@ async def stop_and_clear(chat_id: int) -> None:
     from anony import call, db
 
     queue.clear_all(chat_id)
+    _started_at.pop(chat_id, None)
+    _recovery_attempts.pop(chat_id, None)
     await db.set_loop(chat_id, 0)
     _cancel_idle(chat_id)
     await call.stop(chat_id)
